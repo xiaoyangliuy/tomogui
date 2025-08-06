@@ -223,6 +223,59 @@ class TomoCuPyGUI(QWidget):
         # Tomolog placeholder
         tomolog_group = QGroupBox("Tomolog")
         tomolog_layout = QVBoxLayout()
+
+        # Row 1: Beamline + Scan
+        row1 = QHBoxLayout()
+        row1.addWidget(QLabel("Beamline"))
+        self.beamline_box = QComboBox()
+        self.beamline_box.addItems(["2-bm", "7-bm", "32-id"])
+        row1.addWidget(self.beamline_box)
+
+        row1.addWidget(QLabel("Scan"))
+        self.scan_input = QLineEdit()
+        row1.addWidget(self.scan_input)
+
+        # Row 2: Cloud + URL
+        row1.addWidget(QLabel("Cloud"))
+        self.cloud_box = QComboBox()
+        self.cloud_box.addItems(["imgur", "globus", "aps"])
+        self.cloud_box.setCurrentText("imgur")
+        row1.addWidget(self.cloud_box)
+        tomolog_layout.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("URL"))
+        self.url_input = QLineEdit()
+        row2.addWidget(self.url_input)
+        tomolog_layout.addLayout(row2)
+
+        # Row 3: X, Y, Z
+        row3 = QHBoxLayout()
+        row3.addWidget(QLabel("X"))
+        self.x_input = QLineEdit("-1")
+        row3.addWidget(self.x_input)
+        row3.addWidget(QLabel("Y"))
+        self.y_input = QLineEdit("-1")
+        row3.addWidget(self.y_input)
+        row3.addWidget(QLabel("Z"))
+        self.z_input = QLineEdit("-1")
+        row3.addWidget(self.z_input)
+        tomolog_layout.addLayout(row3)
+
+        # Row 4: Extra parameters
+        row4 = QHBoxLayout()
+        row4.addWidget(QLabel("Extra Params"))
+        self.extra_params_input = QLineEdit()
+        self.extra_params_input.setPlaceholderText("--public True")  # Example shown when empty
+        row4.addWidget(self.extra_params_input)
+        tomolog_layout.addLayout(row4)
+
+        # Row 5: Apply button
+        apply_btn = QPushButton("Apply")
+        apply_btn.clicked.connect(self.run_tomolog)
+        tomolog_layout.addWidget(apply_btn)
+
+
         tomolog_group.setLayout(tomolog_layout)
         right_layout.addWidget(tomolog_group, 2)
 
@@ -533,6 +586,51 @@ class TomoCuPyGUI(QWidget):
             self.ax.set_ylim(ylim)
 
         self.canvas.draw()
+
+    def run_tomolog(self):
+        beamline = self.beamline_box.currentText()
+        filename = self.filename_input.text().strip()
+        cloud = self.cloud_box.currentText()
+        url = self.url_input.text().strip()
+        x = self.x_input.text().strip()
+        y = self.y_input.text().strip()
+        z = self.z_input.text().strip()
+        scan_number = self.scan_input.text().strip()
+        scan_padded = f"{int(scan_number):04d}"
+        data_folder = self.data_path.text().strip()
+        vmin = self.min_input.text().strip()
+        vmax = self.max_input.text().strip()
+        if not data_folder:
+            self.log_output.append("❌[ERROR] Data folder not set.")
+            return
+        filename = os.path.join(data_folder, f"{scan_padded}.h5")
+        if not filename:
+            self.log_output.append("❌[ERROR] Filename not exist.")
+            return
+
+        cmd = [
+            "tomolog", "run"
+            "--beamline", beamline,
+            "--filename", filename,
+            "--cloud", cloud,
+            "--url", url,
+            "--idx", x,
+            "--idy", y,
+            "--idz", z,
+            "--min", vmin,
+            "--max", vmax
+        ]
+
+        # Run the command
+        self.log_output.append(f">>> Running Tomolog: {' '.join(cmd)}")
+        QApplication.processEvents()  # ✅ Force UI to update before running the process
+        try:
+            subprocess.run(cmd, check=True)
+            self.log_output.append("✅ Tomolog finished successfully")
+        except subprocess.CalledProcessError as e:
+            self.log_output.append(f"❌[ERROR] Tomolog failed with code {e.returncode}")
+        except Exception as e:
+            self.log_output.append(f"❌[ERROR] Failed to run Tomolog: {e}")
 
 
 
