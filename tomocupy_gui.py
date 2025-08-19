@@ -16,9 +16,8 @@ from PIL import Image
 import matplotlib as mpl
 
 GUI_path = Path(__file__).resolve().parent
-parent_path = GUI_path.parent
 mpl.rcdefaults()
-mpl.style.use(f"{parent_path}/tomoGUI_mpl_format.mplstyle")
+mpl.style.use(f"{GUI_path}/tomoGUI_mpl_format.mplstyle")
 
 
 class TomoCuPyGUI(QWidget):
