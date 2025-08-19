@@ -248,6 +248,7 @@ class TomoCuPyGUI(QWidget):
 
         row1.addWidget(QLabel("Scan"))
         self.scan_input = QLineEdit()
+        self.scan_input.setPlaceholderText("e.g. 1 or 2-5 or 6,8-15,18")
         row1.addWidget(self.scan_input)
 
         # Row 2: Cloud + URL
