@@ -757,7 +757,8 @@ class TomoCuPyGUI(QWidget):
     def auto_img_contrast(self, saturation=0.35):
         """clip saturated pixels with 0.35%, similar to Fiji B&C auto function """
         if self._current_img is not None:
-            a = self._current_img.ravel()
+            mask = (self._current_img >= self.vmin) & (self._current_img <= self.vmax)
+            a = self._current_img[mask].ravel()
         else:
             self.log_output.append("⚠️ No image loaded to auto contrast.")
             return
@@ -771,11 +772,11 @@ class TomoCuPyGUI(QWidget):
                 lo, hi = float(np.nanmin(a)), float(np.nanmax(a))
         except Exception:
             lo, hi= float(np.nanmin(a)), float(np.nanmax(a))
-        self._current_img = np.clip(self._current_img, lo, hi) #update current image clipping
         self.vmin, self.vmax = round(lo, 5), round(hi, 5)
         self.min_input.setText(str(self.vmin))  
         self.max_input.setText(str(self.vmax))
         self.refresh_current_image()
+        self._current_img = np.clip(self._current_img, lo, hi) #update current image clipping
 
     def reset_img_contrast(self):
         """Reset contrast to original min/max values."""
