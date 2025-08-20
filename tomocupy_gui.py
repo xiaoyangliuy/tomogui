@@ -22,50 +22,6 @@ GUI_path = Path(__file__).resolve().parent
 mpl.rcdefaults()
 mpl.style.use(f"{GUI_path}/tomoGUI_mpl_format.mplstyle")
 
-class OneShotToolbar(NavigationToolbar2QT):
-    """Toolbar that auto-disables Zoom after a single use (optionally Pan too)."""
-    def release_zoom(self, event):
-        # Let the base class finish the zoom operation first
-        super().release_zoom(event)
-        # Immediately toggle Zoom off so the next click is normal interaction
-        if getattr(self, "_active", None) == "ZOOM":
-            try:
-                # Uncheck the zoom button in the UI (helps on some Qt versions)
-                act = getattr(self, "_actions", {}).get("zoom")
-                if act:
-                    act.setChecked(False)
-            except Exception:
-                pass
-            # Toggle the tool off
-            try:
-                self.zoom()
-            except Exception:
-                pass
-            # Clear any status message
-            try:
-                self.set_message("")
-            except Exception:
-                pass
-
-    #Pan to be one-shot:
-    def release_pan(self, event):
-        super().release_pan(event)
-        if getattr(self, "_active", None) == "PAN":
-            try:
-                act = getattr(self, "_actions", {}).get("pan")
-                if act:
-                    act.setChecked(False)
-            except Exception:
-                pass
-            try:
-                self.pan()
-            except Exception:
-                pass
-            try:
-                self.set_message("")
-            except Exception:
-                pass
-
 class TomoCuPyGUI(QWidget):
     def __init__(self):
         super().__init__()
@@ -255,8 +211,10 @@ class TomoCuPyGUI(QWidget):
         self.roi_extent = None  # Placeholder for ROI extent
         self._drawing_roi = False  # Flag to track if ROI is being drawn
         self.canvas.mpl_connect("button_press_event", self._on_canvas_click)
-        self.toolbar = OneShotToolbar(self.canvas, self)
+        self.toolbar = NavigationToolbar2QT(self.canvas, self)
         toolbar_row.addWidget(self.toolbar)
+        self._cid_release = self.canvas.mpl_connect("button_release_event", self._nav_oneshot_release)
+
         
 
         # Colormap dropdown
@@ -1048,6 +1006,54 @@ class TomoCuPyGUI(QWidget):
         self._last_xlim = self.ax.get_xlim()
         self._last_ylim = self.ax.get_ylim()
         self._last_image_shape = (h, w)
+
+    def _remember_view(self):
+        """Record current view so the next image keeps the same zoom/pan."""
+        try:
+            self._last_xlim = self.ax.get_xlim()
+            self._last_ylim = self.ax.get_ylim()
+            if self._current_img is not None:
+                self._last_image_shape = self._current_img.shape
+        except Exception:
+            pass
+
+    def _nav_oneshot_release(self, event):
+        """After a zoom-rect or pan ends, remember view and auto-disable the tool."""
+        if event.inaxes != self.ax:
+            return
+        # Only left-button releases should toggle tools off
+        try:
+            if event.button != MouseButton.LEFT:
+                return
+        except Exception:
+            pass
+
+        mode = getattr(self.toolbar, "mode", "")
+        if mode in ("zoom rect", "pan/zoom"):
+            # 1) remember current view so scrolling slices keeps it
+            self._remember_view()
+            self._keep_zoom = True
+
+            # 2) turn the tool off (one-shot)
+            try:
+                if mode == "zoom rect":
+                    self.toolbar.zoom()  # toggles off
+                else:
+                    self.toolbar.pan()   # toggles off
+            except Exception:
+                pass
+
+            # 3) clear any status text & restore cursor (nice-to-have)
+            try:
+                self.toolbar.set_message("")
+            except Exception:
+                pass
+            try:
+                self.canvas.setCursor(Qt.ArrowCursor)
+            except Exception:
+                pass
+
+
 
     def get_note_value(self): # for tomolog note
         note = self.note_input.text().strip()
