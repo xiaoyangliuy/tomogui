@@ -203,6 +203,10 @@ class TomoCuPyGUI(QWidget):
         self.fig = Figure(figsize=(5, 6.65))
         self.canvas = FigureCanvas(self.fig)
         self.ax = self.fig.add_subplot(111)
+        self._keep_zoom = False
+        self._last_xlim = None
+        self._last_ylim = None
+        self._last_image_shape = None
         self.rect_selector = None  # Placeholder for rectangle selector
         self.roi_extent = None  # Placeholder for ROI extent
         self._drawing_roi = False  # Flag to track if ROI is being drawn
@@ -733,6 +737,8 @@ class TomoCuPyGUI(QWidget):
         if not self.preview_files:
             self.log_output.append(f"❌No try folder")
             return
+        self._keep_zoom = False # reset zoom state
+        self._clear_roi()  # clear any existing ROI
         self.set_image_scale(self.preview_files[0])
         try:
             self.slice_slider.valueChanged.disconnect()
@@ -752,7 +758,8 @@ class TomoCuPyGUI(QWidget):
         if not self.full_files:
             self.log_output.append("⚠️ No full reconstruction images found.")
             return
-
+        self._keep_zoom = False # reset zoom state
+        self._clear_roi()  # clear any existing ROI
         self.set_image_scale(self.full_files[0])
         try:
             self.slice_slider.valueChanged.disconnect()
@@ -764,7 +771,7 @@ class TomoCuPyGUI(QWidget):
 
     def set_image_scale(self, img_path):
         img = np.array(Image.open(img_path))
-        self.vmin, self.vmax = round(img.min(),5), round(img.max(),5)  #use 95% of min.max as auto
+        self.vmin, self.vmax = round(img.min(),5), round(img.max(),5) 
         self.min_input.setText(str(self.vmin))
         self.max_input.setText(str(self.vmax))
 
@@ -777,6 +784,7 @@ class TomoCuPyGUI(QWidget):
 
         # (Re)create selector if needed
         if self.rect_selector is None:
+            style = dict(edgecolor='red', facecolor='none', linewidth=2, alpha=1.0)
             self.rect_selector = RectangleSelector(
                 self.ax,
                 self._on_rect_complete,     # callback on release
@@ -784,7 +792,8 @@ class TomoCuPyGUI(QWidget):
                 button=[1],                 # left mouse
                 minspanx=2, minspany=2,
                 spancoords='data',
-                interactive=True
+                interactive=False,
+                rectprops=style
             )
         self._drawing_roi = True
         self.roi_extent = None
@@ -807,6 +816,23 @@ class TomoCuPyGUI(QWidget):
             f"ROI set: x[{int(self.roi_extent[0])}:{int(self.roi_extent[1])}], "
             f"y[{int(self.roi_extent[2])}:{int(self.roi_extent[3])}]"
         )
+
+    def _clear_roi(self):
+        """Hide/remove any active ROI."""
+        try:
+            if self.rect_selector is not None:
+                # deactivate and hide selector
+                try:
+                    self.rect_selector.set_active(False)
+                    if hasattr(self.rect_selector, "set_visible"):
+                        self.rect_selector.set_visible(False)
+                except Exception:
+                    pass
+                self.rect_selector = None
+        finally:
+            self.roi_extent = None
+            # no need to redraw here; show_image will draw
+
 
     def _on_canvas_click(self, event):
         """Any click on the image hides/removes the ROI (unless we are mid-draw)."""
@@ -834,7 +860,7 @@ class TomoCuPyGUI(QWidget):
 
 
     #auto contrast function
-    def auto_img_contrast(self, saturation=0.35):
+    def auto_img_contrast(self, saturation=2):
         """Fiji-like Auto: trims tails within current window; uses ROI if present; never edits pixels."""
         if self._current_img is None:
             self.log_output.append("⚠️ No image loaded to auto contrast.")
@@ -915,11 +941,13 @@ class TomoCuPyGUI(QWidget):
             self.log_output.append("⚠️ No image loaded to reset contrast.")
 
     def update_try_slice(self):
+        self._keep_zoom = True  # keep zoom state
         idx = self.slice_slider.value()
         if 0 <= idx < len(self.preview_files):
             self.show_image(self.preview_files[idx])
 
     def update_full_slice(self):
+        self._keep_zoom = True  # keep zoom state
         idx = self.slice_slider.value()
         if 0 <= idx < len(self.full_files):
             self.show_image(self.full_files[idx])
@@ -938,19 +966,16 @@ class TomoCuPyGUI(QWidget):
         img = self._safe_open_image(img_path)
         if img.ndim == 3:
             img = img[..., 0]
-        height, width = img.shape
+        h, w = img.shape
         self._current_img = img
         self._current_img_path = img_path
-        # Save current zoom state
-        try:
-            xlim = self.ax.get_xlim()
-            ylim = self.ax.get_ylim()
-        except AttributeError:
-            xlim, ylim = (0, width), (height, 0)
 
+        # --- clear ROI whenever a new image is drawn ---
+        self._clear_roi()
+
+        # clear axes and draw the image
         self.ax.clear()
-
-        self.ax.imshow(
+        im = self.ax.imshow(
             img,
             cmap=self.current_cmap,
             vmin=self.vmin,
@@ -958,19 +983,28 @@ class TomoCuPyGUI(QWidget):
             origin="upper"
         )
         self.ax.set_title(os.path.basename(img_path), pad=5)
-        
-
-        # Keep pixels square like ImageJ
         self.ax.set_aspect('equal')
 
-        # Restore zoom if it’s not the very first image
-        if (0 <= xlim[0] < xlim[1] <= width and
-            0 <= ylim[1] < ylim[0] <= height and
-            (xlim, ylim) != ((0, width), (height, 0))):
-            self.ax.set_xlim(xlim)
-            self.ax.set_ylim(ylim)
+        # --- zoom policy ---
+        # keep zoom only if same image shape AND we explicitly asked to keep it
+        if (self._keep_zoom and
+            self._last_image_shape == (h, w) and
+            self._last_xlim is not None and
+            self._last_ylim is not None):
+            self.ax.set_xlim(self._last_xlim)
+            self.ax.set_ylim(self._last_ylim)
+        else:
+            # reset to full image extents
+            self.ax.set_xlim(0, w)
+            self.ax.set_ylim(h, 0)
+
         self.fig.tight_layout()
-        self.canvas.draw()
+        self.canvas.draw_idle()
+
+        # remember current zoom for next time
+        self._last_xlim = self.ax.get_xlim()
+        self._last_ylim = self.ax.get_ylim()
+        self._last_image_shape = (h, w)
 
     def get_note_value(self): # for tomolog note
         note = self.note_input.text().strip()
