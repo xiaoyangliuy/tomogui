@@ -754,13 +754,11 @@ class TomoCuPyGUI(QWidget):
         self.max_input.setText(str(self.vmax))
 
     #auto contrast function
-    def auto_img_contrast(self, step=0.35, cap=10.0):
-        """Fiji-like Auto: each click increases the saturation percentage."""
+    def auto_img_contrast(self, saturation=0.35):
+        """Fiji-like Auto: each click trims tails within the current display window."""
         if self._current_img is None:
             self.log_output.append("⚠️ No image loaded to auto contrast.")
             return
-
-        self._auto_sat_pct = min(getattr(self, "_auto_sat_pct", 0.0) + step, cap)
 
         a = np.asarray(self._current_img, dtype=float).ravel()
         a = a[np.isfinite(a)]
@@ -768,15 +766,35 @@ class TomoCuPyGUI(QWidget):
             self.log_output.append("⚠️ No pixels to auto contrast.")
             return
 
-        per_tail = self._auto_sat_pct / 2.0  # already in percent
-        lo, hi = np.nanpercentile(a, [per_tail, 100.0 - per_tail])
-        if not np.isfinite(lo) or not np.isfinite(hi) or lo >= hi:
-            lo, hi = float(np.nanmin(a)), float(np.nanmax(a))
-            if lo >= hi: hi = lo + 1.0
+        # interpret saturation given as 0.35% or 0.0035 fraction
+        sat = float(saturation)
+        sat_pct = sat * 100 if sat < 0.01 else sat
+        per_tail = sat_pct / 2.0
 
-        self.vmin, self.vmax = float(round(lo, 5)), float(round(hi, 5))
+        # restrict to what's currently visible (Fiji-like iterative tightening)
+        vmin = getattr(self, "vmin", float(np.nanmin(a)))
+        vmax = getattr(self, "vmax", float(np.nanmax(a)))
+        vis = a[(a >= vmin) & (a <= vmax)]
+        # fallback if the visible set is tiny
+        if vis.size < 64:
+            vis = a
+
+        # compute new window
+        lo, hi = np.nanpercentile(vis, [per_tail, 100.0 - per_tail])
+        if not np.isfinite(lo) or not np.isfinite(hi) or lo >= hi:
+            lo, hi = float(np.nanmin(vis)), float(np.nanmax(vis))
+            if not np.isfinite(lo) or not np.isfinite(hi) or lo >= hi:
+                hi = lo + 1.0  # tiny window fallback
+
+        new_vmin, new_vmax = float(round(lo, 5)), float(round(hi, 5))
+        if (new_vmin, new_vmax) == (vmin, vmax):
+            self.log_output.append("Auto: display range already optimal for current window.")
+            return
+
+        self.vmin, self.vmax = new_vmin, new_vmax
         self.min_input.setText(str(self.vmin)); self.max_input.setText(str(self.vmax))
         self.refresh_current_image()
+
 
     def reset_img_contrast(self):
         """Reset contrast to original min/max values."""
