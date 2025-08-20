@@ -22,6 +22,49 @@ GUI_path = Path(__file__).resolve().parent
 mpl.rcdefaults()
 mpl.style.use(f"{GUI_path}/tomoGUI_mpl_format.mplstyle")
 
+class OneShotToolbar(NavigationToolbar2QT):
+    """Toolbar that auto-disables Zoom after a single use (optionally Pan too)."""
+    def release_zoom(self, event):
+        # Let the base class finish the zoom operation first
+        super().release_zoom(event)
+        # Immediately toggle Zoom off so the next click is normal interaction
+        if getattr(self, "_active", None) == "ZOOM":
+            try:
+                # Uncheck the zoom button in the UI (helps on some Qt versions)
+                act = getattr(self, "_actions", {}).get("zoom")
+                if act:
+                    act.setChecked(False)
+            except Exception:
+                pass
+            # Toggle the tool off
+            try:
+                self.zoom()
+            except Exception:
+                pass
+            # Clear any status message
+            try:
+                self.set_message("")
+            except Exception:
+                pass
+
+    #Pan to be one-shot:
+    def release_pan(self, event):
+        super().release_pan(event)
+        if getattr(self, "_active", None) == "PAN":
+            try:
+                act = getattr(self, "_actions", {}).get("pan")
+                if act:
+                    act.setChecked(False)
+            except Exception:
+                pass
+            try:
+                self.pan()
+            except Exception:
+                pass
+            try:
+                self.set_message("")
+            except Exception:
+                pass
 
 class TomoCuPyGUI(QWidget):
     def __init__(self):
@@ -439,7 +482,7 @@ class TomoCuPyGUI(QWidget):
 
     # Utility methods
     def browse_data_folder(self):
-        start_dir = self.data_path.text().strip() or os.path.expanduser("~")
+        start_dir = self.data_path.text().strip() or os.path.expanduser("/")
         dialog = QFileDialog(self, "Select data folder")
         dialog.setFileMode(QFileDialog.Directory)
         dialog.setOption(QFileDialog.ShowDirsOnly, True)
@@ -994,8 +1037,9 @@ class TomoCuPyGUI(QWidget):
             self.ax.set_ylim(self._last_ylim)
         else:
             # reset to full image extents
-            self.ax.set_xlim(0, w)
-            self.ax.set_ylim(h, 0)
+            left, right, bottom, top = im.get_extent()
+            self.ax.set_xlim(left, right)
+            self.ax.set_ylim(top, bottom)
 
         self.fig.tight_layout()
         self.canvas.draw_idle()
@@ -1130,49 +1174,7 @@ class TomoCuPyGUI(QWidget):
                 self.log_output.append(f"❌[ERROR] Failed to run Tomolog: {e}")
 
 
-class OneShotToolbar(NavigationToolbar2QT):
-    """Toolbar that auto-disables Zoom after a single use (optionally Pan too)."""
-    def release_zoom(self, event):
-        # Let the base class finish the zoom operation first
-        super().release_zoom(event)
-        # Immediately toggle Zoom off so the next click is normal interaction
-        if getattr(self, "_active", None) == "ZOOM":
-            try:
-                # Uncheck the zoom button in the UI (helps on some Qt versions)
-                act = getattr(self, "_actions", {}).get("zoom")
-                if act:
-                    act.setChecked(False)
-            except Exception:
-                pass
-            # Toggle the tool off
-            try:
-                self.zoom()
-            except Exception:
-                pass
-            # Clear any status message
-            try:
-                self.set_message("")
-            except Exception:
-                pass
 
-    #Pan to be one-shot:
-    def release_pan(self, event):
-        super().release_pan(event)
-        if getattr(self, "_active", None) == "PAN":
-            try:
-                act = getattr(self, "_actions", {}).get("pan")
-                if act:
-                    act.setChecked(False)
-            except Exception:
-                pass
-            try:
-                self.pan()
-            except Exception:
-                pass
-            try:
-                self.set_message("")
-            except Exception:
-                pass
 
 
 if __name__ == "__main__":
