@@ -793,7 +793,7 @@ class TomoCuPyGUI(QWidget):
                 minspanx=2, minspany=2,
                 spancoords='data',
                 interactive=False,
-                rectprops=style
+                props=style
             )
         self._drawing_roi = True
         self.roi_extent = None
@@ -860,7 +860,7 @@ class TomoCuPyGUI(QWidget):
 
 
     #auto contrast function
-    def auto_img_contrast(self, saturation=2):
+    def auto_img_contrast(self, saturation=10):
         """Fiji-like Auto: trims tails within current window; uses ROI if present; never edits pixels."""
         if self._current_img is None:
             self.log_output.append("⚠️ No image loaded to auto contrast.")
@@ -881,10 +881,8 @@ class TomoCuPyGUI(QWidget):
                 self.log_output.append("⚠️ ROI too small.")
                 return
             data = img[y0:y1, x0:x1]
-            roi_note = "ROI"
         else:
             data = img
-            roi_note = ""
 
         a = np.asarray(data, dtype=float).ravel()
         a = a[np.isfinite(a)]
@@ -892,7 +890,6 @@ class TomoCuPyGUI(QWidget):
             self.log_output.append("⚠️ No finite pixels for Auto.")
             return
 
-        # interpret 0.35 or 0.0035
         sat = float(saturation)
         sat_pct = sat * 100.0 if sat < 0.01 else sat
         per_tail = sat_pct / 2.0
