@@ -213,11 +213,15 @@ class TomoCuPyGUI(QWidget):
         self.cmap_box.currentIndexChanged.connect(self.update_cmap)
         toolbar_row.addWidget(self.cmap_box)
 
-        #auto scale image button
+        #auto/reset scale image button
         auto_scale_btn = QPushButton("Auto")
-        auto_scale_btn.setFixedWidth(50)
+        auto_scale_btn.setFixedWidth(48)
         auto_scale_btn.clicked.connect(self.auto_img_contrast)
+        reset_scale_btn = QPushButton("Reset")
+        reset_scale_btn.setFixedWidth(48)
+        reset_scale_btn.clicked.connect(self.reset_img_contrast)
         toolbar_row.addWidget(auto_scale_btn)
+        toolbar_row.addWidget(reset_scale_btn)
 
         # Min/Max inputs
         toolbar_row.addWidget(QLabel("Min:"))
@@ -767,10 +771,22 @@ class TomoCuPyGUI(QWidget):
                 lo, hi = float(np.nanmin(a)), float(np.nanmax(a))
         except Exception:
             lo, hi= float(np.nanmin(a)), float(np.nanmax(a))
+        self._current_img = np.clip(self._current_img, lo, hi) #update current image clipping
         self.vmin, self.vmax = round(lo, 5), round(hi, 5)
         self.min_input.setText(str(self.vmin))  
         self.max_input.setText(str(self.vmax))
         self.refresh_current_image()
+
+    def reset_img_contrast(self):
+        """Reset contrast to original min/max values."""
+        if self._current_img is not None:
+            self._current_img = self._safe_open_image(self._current_img_path)
+            self.vmin, self.vmax = round(self._current_img.min(), 5), round(self._current_img.max(), 5)
+            self.min_input.setText(str(self.vmin))
+            self.max_input.setText(str(self.vmax))
+            self.refresh_current_image()
+        else:
+            self.log_output.append("⚠️ No image loaded to reset contrast.")
 
     def update_try_slice(self):
         idx = self.slice_slider.value()
