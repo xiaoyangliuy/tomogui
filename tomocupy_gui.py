@@ -742,6 +742,7 @@ class TomoCuPyGUI(QWidget):
             return
         self._keep_zoom = False # reset zoom state
         self._clear_roi()  # clear any existing ROI
+        self._reset_view_state()  # reset zoom state
         self.set_image_scale(self.preview_files[0])
         try:
             self.slice_slider.valueChanged.disconnect()
@@ -763,6 +764,7 @@ class TomoCuPyGUI(QWidget):
             return
         self._keep_zoom = False # reset zoom state
         self._clear_roi()  # clear any existing ROI
+        self._reset_view_state()  # reset zoom state
         self.set_image_scale(self.full_files[0])
         try:
             self.slice_slider.valueChanged.disconnect()
@@ -1053,6 +1055,26 @@ class TomoCuPyGUI(QWidget):
             except Exception:
                 pass
 
+    def _reset_view_state(self):
+        """Forget any prior zoom/pan so the next image shows full frame."""
+        # turn off any active pan/zoom tool (nice-to-have)
+        try:
+            mode = getattr(self.toolbar, "mode", "")
+            if mode == "zoom rect":
+                self.toolbar.zoom()  # toggles off
+            elif mode == "pan/zoom":
+                self.toolbar.pan()   # toggles off
+            try:
+                self.toolbar.set_message("")
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+        self._keep_zoom = False
+        self._last_xlim = None
+        self._last_ylim = None
+        self._last_image_shape = None
 
 
     def get_note_value(self): # for tomolog note
