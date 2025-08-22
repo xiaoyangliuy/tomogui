@@ -1089,7 +1089,7 @@ class TomoCuPyGUI(QWidget):
             # reset to full image extents
             left, right, bottom, top = im.get_extent()
             self.ax.set_xlim(left, right)
-            self.ax.set_ylim(top, bottom)
+            self.ax.set_ylim(bottom, top)
 
         self.fig.tight_layout()
         self.canvas.draw_idle()
