@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QTextEdit, QLineEdit, QLabel, QProgressBar,
     QComboBox, QSlider, QGroupBox, QSizePolicy, QMessageBox
 )
-from PySide6.QtCore import Qt, QEvent, QProcess, QRectF, QPointF
+from PySide6.QtCore import Qt, QEvent, QProcess, QEventLoop
 from PIL import Image
 import matplotlib as mpl
 from matplotlib.widgets import RectangleSelector
@@ -494,28 +494,12 @@ class TomoCuPyGUI(QWidget):
 
         self.process.clear()
 
-    def _delete_when_done(self, path):
-        """Remove a file when the *most recently started* process finishes."""
-        if not path:
-            return
-        if not self.process:
-            return
-        p = self.process[-1][0]  # the QProcess you just started
-        def _rm(*_):
-            try:
-                if os.path.exists(path):
-                    os.remove(path)
-                    self.log_output.append(f"🧹 Removed {path}")
-            except Exception as e:
-                self.log_output.append(f"⚠️ Could not remove {path}: {e}")
-        p.finished.connect(_rm)
-
-
-    def run_command_live(self, cmd, proj_file=None, job_label=None):
+    def run_command_live(self, cmd, proj_file=None, job_label=None, *, wait=False):
         """
-        Start an external command without blocking the GUI.
+        Start an external command without blocking the GUI wit
         proj_file: full path to the .h5 (for log naming, optional)
         job_label: e.g., 'recon-try', 'recon-full', 'tomolog' (optional)
+        wait: wait until finish
         """
         # Build a readable job name for logs
         scan_id = None
@@ -537,23 +521,46 @@ class TomoCuPyGUI(QWidget):
         p = QProcess(self)
         p.setProcessChannelMode(QProcess.ForwardedChannels)
 
+        loop = QEventLoop() if wait else None
+        result = {"code": None}
+
         # Cleanup on finish
         def on_finished(code, status):
             try:
                 self.process[:] = [(pp, nn) for (pp, nn) in self.process if pp is not p]
             except Exception:
                 pass
-            if code == 0:
-                pass
-            else:
+            if code != 0:
                 self.log_output.append(f"❌ [{name}] failed with code {code}.")
+            result["code"] = code                         # NEW
+            if loop is not None:
+                loop.quit()                               # NEW
+
+        def on_error(_err):
+            # ensure we don't hang on FailedToStart
+            if result["code"] is None:
+                result["code"] = -1
+            if loop is not None:
+                loop.quit()
+            self.log_output.append(f"❌ [{name}] {p.errorString()}")
 
         p.finished.connect(on_finished)
+        p.errorOccurred.connect(on_error)  # NEW (nice to have)
 
         # Track it so Abort can find it
+        if not isinstance(self.process, list):
+            self.process = []
         self.process.append((p, name))
+
         p.start(str(cmd[0]), [str(a) for a in cmd[1:]])
 
+        # NEW: wait path — keeps GUI responsive
+        if wait:
+            loop.exec()                    # blocks this function only, not the GUI
+            return int(result["code"])     # return exit code
+
+        # Async path
+        return p
 
     def try_reconstruction(self):
         proj_file = self.proj_file_box.currentData()
@@ -565,6 +572,7 @@ class TomoCuPyGUI(QWidget):
             cor = float(cor_val)
         except ValueError:
             self.log_output.append(f"❌ wrong rotation axis input")
+            return
         config_text = self.config_editor_try.toPlainText()
         if not config_text.strip():
             self.log_output.append("⚠️ not use conf")
@@ -576,8 +584,21 @@ class TomoCuPyGUI(QWidget):
                "--config", temp_try, 
                "--file-name", proj_file,
                "--rotation-axis", str(cor)]
-        self.run_command_live(cmd, proj_file=proj_file, job_label="Try recon")
-        self._delete_when_done(temp_try)
+        code = self.run_command_live(cmd, proj_file=proj_file, job_label="Try recon",wait=True)
+        try:
+            if code == 0:
+                self.log_output.append(f"✅ Done try recon {proj_file}")
+            else:
+                self.log_output.append(f"❌ Try recon {proj_file} failed.")
+
+        finally:
+        # delete temp file deterministically AFTER the process finished
+            try:
+                if os.path.exists(temp_try):
+                    os.remove(temp_try)
+                    self.log_output.append(f"🧹 Removed {temp_try}")
+            except Exception as e:
+                self.log_output.append(f"⚠️ Could not remove {temp_try}: {e}")
 
     def full_reconstruction(self):
         proj_file = self.proj_file_box.currentData()
@@ -597,14 +618,28 @@ class TomoCuPyGUI(QWidget):
                "--config", temp_full, 
                "--file-name", proj_file, 
                "--rotation-axis", str(cor_value)]
-        self.run_command_live(cmd, proj_file=proj_file, job_label="Full recon")
-        self._delete_when_done(temp_full)
+        code = self.run_command_live(cmd, proj_file=proj_file, job_label="Full recon")
+        try:
+            if code == 0:
+                self.log_output.append(f"✅ Done try recon {proj_file}")
+            else:
+                self.log_output.append(f"❌ Try recon {proj_file} failed.")
+
+        finally:
+        # delete temp file deterministically AFTER the process finished
+            try:
+                if os.path.exists(temp_full):
+                    os.remove(temp_full)
+                    self.log_output.append(f"🧹 Removed {temp_full}")
+            except Exception as e:
+                self.log_output.append(f"⚠️ Could not remove {temp_full}: {e}")
         self.view_btn.setEnabled(True)
 
     def batch_try_reconstruction(self):
             try:
                 start_num = int(self.start_scan_input.text())
                 end_num = int(self.end_scan_input.text())
+                total = end_num - start_num + 1
             except ValueError:
                 self.log_output.append("❌[ERROR] Invalid start or end scan number.")
                 return
@@ -618,33 +653,48 @@ class TomoCuPyGUI(QWidget):
                 cor = float(cor_val)
             except ValueError:
                 self.log_output.append(f"❌ wrong rotation axis input")
+                return
 
             config_text = self.config_editor_try.toPlainText()
             if not config_text.strip():
                 self.log_output.append("⚠️ not use conf.")
-                pass
             temp_try = os.path.join(folder, "temp_batch_try.conf")
             with open(temp_try, "w") as f:
                 f.write(config_text)
+            summary = {"done": [], "fail": [], 'no_file': []}
+            try:
+                for i, scan_num in enumerate(range(start_num, end_num + 1)):
+                    scan_str = f"{scan_num:04d}"
+                    match_files = glob.glob(os.path.join(folder, f"*{scan_str}.h5"))
+                    if not match_files:
+                        self.log_output.append(f"⚠️[WARN] No file found for scan {scan_str}, skipping.")
+                        summary['no_file'].append(scan_str)
+                        continue
+                    proj_file = match_files[0]
 
-            for scan_num in range(start_num, end_num + 1):
-                scan_str = f"{scan_num:04d}"
-                match_files = glob.glob(os.path.join(folder, f"*{scan_str}.h5"))
-                if not match_files:
-                    self.log_output.append(f"⚠️[WARN] No file found for scan {scan_str}, skipping.")
-                    continue
-                proj_file = match_files[0]
+                    cmd = ["tomocupy", "recon", 
+                        "--reconstruction-type", "try", 
+                        "--config", temp_try, 
+                        "--file-name", proj_file,
+                        "--rotation-axis", str(cor)
+                        ]
+                    code = self.run_command_live(cmd, proj_file=proj_file, job_label=f'batch try {i}/{total}', wait=True)
+                    if code == 0:
+                        self.log_output.append(f"✅ Done try recon {proj_file}")
+                        summary['done'].append(scan_str)
+                    else:
+                        self.log_output.append(f"❌ Try recon {proj_file} failed.")
+                        summary['fail'].append(scan_str)
+            finally:
+            # delete temp file after loop finished
+                try:
+                    if os.path.exists(temp_try):
+                        os.remove(temp_try)
+                        self.log_output.append(f"🧹 Removed {temp_try}")
+                except Exception as e:
+                    self.log_output.append(f"⚠️ Could not remove {temp_try}: {e}")
+                self.log_output.append(f"✅Done batch try, check summary: {str(summary)}")
 
-                cmd = ["tomocupy", "recon", 
-                       "--reconstruction-type", "try", 
-                       "--config", temp_try, 
-                       "--file-name", proj_file,
-                       "--rotation-axis", str(cor)
-                       ]
-                self.run_command_live(cmd, proj_file=proj_file, job_label='batch try')
-                self.log_output.append(f"✅Done try recon {proj_file}")
-            self._delete_when_done(temp_try)
-            self.log_output.append("✅Done batch try")
 
     def batch_full_reconstruction(self):
         """use cor_log.json and the config file in the right config txt box files to do 
@@ -661,19 +711,32 @@ class TomoCuPyGUI(QWidget):
         temp_full = os.path.join(self.data_path.text(), "temp_full.conf")
         with open(temp_full, "w") as f:
             f.write(config_text)
-        for entry in data:
-            proj_file, cor_value = entry["filename"], entry["center"]
-            cmd = ["tomocupy", "recon", 
-                "--reconstruction-type", "full", 
-                "--config", temp_full, 
-                "--file-name", proj_file, 
-                "--rotation-axis", str(cor_value)]
-            self.run_command_live(cmd, proj_file=proj_file, job_label="batch full")
-            self.log_output.append(f"✅Finish full recon {proj_file}")
+        summary = {"done": [], "fail": []}
+        size = len(data)
+        try:
+            for i, (proj_file, cor_value) in enumerate(data):
+                cmd = ["tomocupy", "recon", 
+                    "--reconstruction-type", "full", 
+                    "--config", temp_full, 
+                    "--file-name", proj_file, 
+                    "--rotation-axis", str(cor_value)]
+                code = self.run_command_live(cmd, proj_file=proj_file, job_label=f"batch full {i}/{size}", wait=True)
+                if code == 0:
+                    self.log_output.append(f"✅ Done full recon {proj_file}")
+                    summary['done'].append(f"{os.path.basename(proj_file)}")
+                else:
+                    self.log_output.append(f"❌ full recon {proj_file} failed")
+                    summary['fail'].append(f"{os.path.basename(proj_file)}")                
         #delete cor_json and temp_full conf files after batch
-        self._delete_when_done(temp_full)
-        self._delete_when_done(log_file)
-        self.log_output.append("✅Done batch full")
+        finally:
+        # delete temp file after loop finished
+            try:
+                if os.path.exists(temp_full):
+                    os.remove(temp_full)
+                    self.log_output.append(f"🧹 Removed {temp_full}")
+            except Exception as e:
+                self.log_output.append(f"⚠️ Could not remove {temp_full}: {e}")
+            self.log_output.append(f"✅Done batch full, check summary: {str(summary)}")
 
     def record_cor_to_json(self):
         # Get data folder and current COR value
