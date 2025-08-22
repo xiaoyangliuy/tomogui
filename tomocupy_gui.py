@@ -700,9 +700,9 @@ class TomoCuPyGUI(QWidget):
     def batch_full_reconstruction(self):
         """use cor_log.json and the config file in the right config txt box files to do 
             batch recon and delete cor_log.json and temp_full.conf after batch"""
-        log_file = os.path.join(self.data_path.text(), "cor_log.json")
+        log_file = os.path.join(self.data_path.text(), "rot_cen.json")
         if not os.path.exists(log_file):
-            self.log_output.append("❌[ERROR] cor_log.json not found.")
+            self.log_output.append("❌[ERROR] rot_cen.json not found.")
             return
         with open(log_file) as f:
             data = json.load(f)
