@@ -186,7 +186,7 @@ class TomoCuPyGUI(QWidget):
         json_box_layout = QVBoxLayout()
         json_box_layout.addWidget(QLabel("COR Log File:"))
         self.cor_json_output = QTextEdit()
-        self.cor_json_output.setReadOnly(True)
+        self.cor_json_output.setReadOnly(True) #want editable?
         self.cor_json_output.setStyleSheet("QTextEdit { font-size: 12pt; }")
         json_box_layout.addWidget(self.cor_json_output)
         log_json_layout.addLayout(json_box_layout, 2)
@@ -628,30 +628,36 @@ class TomoCuPyGUI(QWidget):
                        "--config", temp_try, 
                        "--file-name", proj_file]
                 self.run_command_live(cmd, proj_file=proj_file, job_label='batch try')
-                #do not need to delete conf file because we use the same one
-                self.log_output.append(f"✅Finish try recon {proj_file}")
-            self.log_output.append("✅Done all try")
+                self.log_output.append(f"✅Done try recon {proj_file}")
+            self._delete_when_done(temp_try)
+            self.log_output.append("✅Done batch try")
 
     def batch_full_reconstruction(self):
+        """use cor_log.json and the config file in the right config txt box files to do 
+            batch recon and delete cor_log.json and temp_full.conf after batch"""
         log_file = os.path.join(self.data_path.text(), "cor_log.json")
         if not os.path.exists(log_file):
+            self.log_output.append("❌[ERROR] cor_log.json not found.")
             return
         with open(log_file) as f:
             data = json.load(f)
-        temp_conf = os.path.join(self.data_path.text(), "temp_batch_full.conf")
-        with open(temp_conf, "w") as f:
-            f.write(self.config_editor_full.toPlainText())
+        config_text = self.config_editor_full.toPlainText()
+        temp_full = os.path.join(self.data_path.text(), "temp_full.conf")
+        with open(temp_full, "w") as f:
+            f.write(config_text)
         for entry in data:
             proj_file, cor_value = entry["filename"], entry["center"]
             cmd = ["tomocupy", "recon", 
-                   "--reconstruction-type", "full", 
-                   "--config", temp_conf, 
-                   "--file-name", proj_file, 
-                   "--rotation-axis", str(cor_value)]
+                "--reconstruction-type", "full", 
+                "--config", temp_full, 
+                "--file-name", proj_file, 
+                "--rotation-axis", str(cor_value)]
             self.run_command_live(cmd, proj_file=proj_file, job_label="batch full")
-            #do not need to delete conf file because we use the same one
             self.log_output.append(f"✅Finish full recon {proj_file}")
-        self.log_output.append("✅Done all full")
+        #delete cor_json and temp_full conf files after batch
+        self._delete_when_done(temp_full)
+        self._delete_when_done(log_file)
+        self.log_output.append("✅Done batch full")
 
     def record_cor_to_json(self):
         # Get data folder and current COR value
