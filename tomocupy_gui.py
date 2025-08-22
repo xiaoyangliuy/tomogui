@@ -664,7 +664,7 @@ class TomoCuPyGUI(QWidget):
                 f.write(config_text)
             summary = {"done": [], "fail": [], 'no_file': []}
             try:
-                for i, scan_num in enumerate(range(start_num, end_num + 1)):
+                for i, scan_num in enumerate(range(start_num, end_num + 1),start=1):
                     scan_str = f"{scan_num:04d}"
                     match_files = glob.glob(os.path.join(folder, f"*{scan_str}.h5"))
                     if not match_files:
@@ -715,7 +715,7 @@ class TomoCuPyGUI(QWidget):
         summary = {"done": [], "fail": []}
         size = len(data)
         try:
-            for i, (proj_file, cor_value) in enumerate(data):
+            for i, (proj_file, cor_value) in enumerate(data.items(),start=1):
                 cmd = ["tomocupy", "recon", 
                     "--reconstruction-type", "full", 
                     "--config", temp_full, 
