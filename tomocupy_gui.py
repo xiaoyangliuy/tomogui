@@ -544,7 +544,7 @@ class TomoCuPyGUI(QWidget):
             except Exception:
                 pass
             if code == 0:
-                self.log_output.append(f"✅ [{name}] finished.")
+                pass
             else:
                 self.log_output.append(f"❌ [{name}] failed with code {code}.")
 
@@ -566,6 +566,8 @@ class TomoCuPyGUI(QWidget):
         except ValueError:
             self.log_output.append(f"❌ wrong rotation axis input")
         config_text = self.config_editor_try.toPlainText()
+        if not config_text.strip():
+            self.log_output.append("⚠️ not use conf")
         temp_try = os.path.join(self.data_path.text(), "temp_try.conf")
         with open(temp_try, "w") as f:
             f.write(config_text)
@@ -585,6 +587,8 @@ class TomoCuPyGUI(QWidget):
             self.log_output.append("❌[ERROR] Invalid Full COR value.")
             return
         config_text = self.config_editor_full.toPlainText()
+        if not config_text.strip():
+            self.log_output.append("⚠️ not use conf.")
         temp_full = os.path.join(self.data_path.text(), "temp_full.conf")
         with open(temp_full, "w") as f:
             f.write(config_text)
@@ -609,8 +613,16 @@ class TomoCuPyGUI(QWidget):
             if not os.path.isdir(folder):
                 self.log_output.append("❌[ERROR] Invalid data folder.")
                 return
+            cor_val = self.cor_input.text().strip() #get user input rotation axis guess
+            try:
+                cor = float(cor_val)
+            except ValueError:
+                self.log_output.append(f"❌ wrong rotation axis input")
 
             config_text = self.config_editor_try.toPlainText()
+            if not config_text.strip():
+                self.log_output.append("⚠️ not use conf.")
+                pass
             temp_try = os.path.join(folder, "temp_batch_try.conf")
             with open(temp_try, "w") as f:
                 f.write(config_text)
@@ -626,7 +638,9 @@ class TomoCuPyGUI(QWidget):
                 cmd = ["tomocupy", "recon", 
                        "--reconstruction-type", "try", 
                        "--config", temp_try, 
-                       "--file-name", proj_file]
+                       "--file-name", proj_file,
+                       "--rotation-axis", str(cor)
+                       ]
                 self.run_command_live(cmd, proj_file=proj_file, job_label='batch try')
                 self.log_output.append(f"✅Done try recon {proj_file}")
             self._delete_when_done(temp_try)
@@ -642,6 +656,8 @@ class TomoCuPyGUI(QWidget):
         with open(log_file) as f:
             data = json.load(f)
         config_text = self.config_editor_full.toPlainText()
+        if not config_text.strip():
+            self.log_output.append("⚠️ not use conf.")
         temp_full = os.path.join(self.data_path.text(), "temp_full.conf")
         with open(temp_full, "w") as f:
             f.write(config_text)
