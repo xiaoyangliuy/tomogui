@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tomogui"
+version = "1.0.0"
+description = "GUI interface for TomoCuPy and TomoLog"
+authors = [
+    {name = "Xiaoyang Liu", email = "XXX@XXX.gov"},
+    {name = "Alberto Mittone", email = "amittone@anl.gov"}
+]
+license = {text = "MIT"}
+requires-python = ">=3.8,<3.13"
+dependencies = [
+    "numpy>=1.20.0",
+    "matplotlib>=3.5.0",
+    "PyQt5>=5.15.0",
+    "Pillow>=8.0.0",
+]
+
+[project.scripts]
+tomogui = "tomogui.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+tomogui = ["styles/*.mplstyle"]

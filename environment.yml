@@ -1,0 +1,13 @@
+name: tomogui
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pyqt=5
+  - matplotlib>=3.5.0
+  - numpy>=1.20.0
+  - pillow>=8.0.0
+  - pip
+  - pip:
+    - -e .
