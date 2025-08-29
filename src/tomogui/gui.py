@@ -568,8 +568,8 @@ class TomoGUI(QWidget):
         if not proj_file:
             self.log_output.append(f"❌ No file")
             return
-        recon_way = self.recon_way_box.currentData().text().strip()
-        cor_method = self.cor_method_box.currentData().text().strip()
+        recon_way = self.recon_way_box.currentText()
+        cor_method = self.cor_method_box.currentText()
         cor_val = self.cor_input.text().strip()
         if cor_method == "auto":
             if cor_val:
@@ -661,8 +661,8 @@ class TomoGUI(QWidget):
         if not os.path.isdir(folder):
             self.log_output.append("❌[ERROR] Invalid data folder.")
             return
-        recon_way = self.recon_way_box.currentData().text().strip()
-        cor_method = self.cor_method_box.currentData().text().strip()
+        recon_way = self.recon_way_box.currentText()
+        cor_method = self.cor_method_box.currenText()
         cor_val = self.cor_input.text().strip()
         if cor_method == 'auto':
             if cor_val:
