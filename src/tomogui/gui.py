@@ -844,13 +844,21 @@ class TomoGUI(QWidget):
         data_folder = self.data_path.text().strip()
         proj_file = self.proj_file_box.currentData()
         raw_fn = os.path.join(data_folder, proj_file)
-        with h5py.File(raw_fn) as raw:
-            flat = raw['/exhcange/data_white']
-            dark = raw['/exchange/data_dark']
-            data = raw['/exchange/data']
-
-
-
+        self._raw_h5 = h5py.File(raw_fn,"r")
+        self.raw_files_num = self._raw_h5['/exchange/data'].shape[0] #number of projections
+        self.dark = self._raw_h5['/exchange/data_dark'].average(axis=0)
+        self.flat = self._raw_h5['/exhcange/data_white'].average(axis=0)
+        self._keep_zoom = False
+        self._clear_roi()
+        self._reset_view_state()        
+        self.set_image_scale(self._raw_h5['/exchange/data'][0])
+        try:
+            self.slice_slider.valueChanged.disconnect()
+        except TypeError:
+            pass
+        self.slice_slider.setMaximum(self.raw_files_num - 1)
+        self.slice_slider.valueChanged.connect(self.update_raw_slice)
+        self.update_raw_slice()
 
     def view_try_reconstruction(self):
         data_folder = self.data_path.text().strip()
@@ -1042,6 +1050,12 @@ class TomoGUI(QWidget):
             self.refresh_current_image()
         else:
             self.log_output.append("No image loaded to reset contrast.")
+    def update_raw_slice(self):
+        self._keep_zoom = True
+        idx = self.slice_slider.value()
+        if 0 <= idx < len(self.raw_files_num):  #needs to remember to change
+            self.show_image(self.preview_files[idx])
+
 
     def update_try_slice(self):
         self._keep_zoom = True
@@ -1065,16 +1079,19 @@ class TomoGUI(QWidget):
         with Image.open(path) as im:
             return np.array(im)
 
-    def show_image(self, img_path):
-        img = self._safe_open_image(img_path)
-        if img.ndim == 3:
-            img = img[..., 0]
-        h, w = img.shape
-        self._current_img = img
-        self._current_img_path = img_path
-
+    def show_image(self, img_path, flag):
+        #for reconstructed images
+        if flag == "raw":
+            img = self._raw_h5['/exchange/data'][img_path,:,:] #for raw projections, it takes img_path as idx
+            img = (img - self.dark)/(self.flat - self.dark)
+        else:
+            img = self._safe_open_image(img_path)
+            if img.ndim == 3:
+                img = img[..., 0]
+            h, w = img.shape
+            self._current_img = img
+            self._current_img_path = img_path
         self._clear_roi()
-
         self.ax.clear()
         im = self.ax.imshow(
             img,
@@ -1104,6 +1121,8 @@ class TomoGUI(QWidget):
         self._last_xlim = self.ax.get_xlim()
         self._last_ylim = self.ax.get_ylim()
         self._last_image_shape = (h, w)
+
+
 
     def _remember_view(self):
         """Record current view so the next image keeps the same zoom/pan."""
