@@ -847,7 +847,7 @@ class TomoGUI(QWidget):
         self._raw_h5 = h5py.File(raw_fn,"r")
         self.raw_files_num = self._raw_h5['/exchange/data'].shape[0] #number of projections
         self.dark = self._raw_h5['/exchange/data_dark'][:].mean(axis=0)
-        self.flat = self._raw_h5['/exhcange/data_white'][:].mean(axis=0)
+        self.flat = self._raw_h5['/exchange/data_white'][:].mean(axis=0)
         self._keep_zoom = False
         self._clear_roi()
         self._reset_view_state()        
