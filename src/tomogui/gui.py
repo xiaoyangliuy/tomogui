@@ -1093,7 +1093,7 @@ class TomoGUI(QWidget):
                 img = img[..., 0]
         h, w = img.shape
         self._current_img = img
-        self._current_img_path = str(img_path)
+        self._current_img_path = img_path
         self._clear_roi()
         self.ax.clear()
         im = self.ax.imshow(
@@ -1104,7 +1104,7 @@ class TomoGUI(QWidget):
             origin="upper",
             extent=[0, w, h, 0]
         )
-        self.ax.set_title(os.path.basename(img_path), pad=5)
+        self.ax.set_title(os.path.basename(str(img_path)), pad=3)
         self.ax.set_aspect('equal')
 
         if (self._keep_zoom and
