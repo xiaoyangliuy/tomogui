@@ -9,7 +9,9 @@ from matplotlib.figure import Figure
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QFileDialog, QTextEdit, QLineEdit, QLabel, QProgressBar,
-    QComboBox, QSlider, QGroupBox, QSizePolicy, QMessageBox
+    QComboBox, QSlider, QGroupBox, QSizePolicy, QMessageBox,
+    QTabWidget, QFormLayout, QCheckBox, QSpinBox, QDoubleSpinBox,
+    QScrollArea
 )
 from PyQt5.QtCore import Qt, QEvent, QProcess, QEventLoop
 
@@ -78,14 +80,14 @@ class TomoGUI(QWidget):
         self.recon_way_box = QComboBox()
         self.recon_way_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.recon_way_box.addItems(["recon","recon_steps"])
-        self.recon_way_box.setCurrentIndex(0) #make recon as default
+        self.recon_way_box.setCurrentIndex(0) # make recon as default
         cor_layout.addWidget(self.recon_way_box)
 
         cor_layout.addWidget(QLabel("COR method"))
         self.cor_method_box = QComboBox()
         self.cor_method_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.cor_method_box.addItems(["auto","manual"])
-        self.cor_method_box.setCurrentIndex(1) #make manual as default
+        self.cor_method_box.setCurrentIndex(1) # make manual as default
         cor_layout.addWidget(self.cor_method_box)
 
         self.cor_input = QLineEdit()
@@ -113,8 +115,16 @@ class TomoGUI(QWidget):
         cor_layout.addWidget(abort_btn)
         left_layout.addLayout(cor_layout)
 
-        # Config boxes
-        config_frame_layout = QHBoxLayout()
+        # ==== TABS (Configs + Params) ====
+        self.tabs = QTabWidget()
+        left_layout.addWidget(self.tabs)
+
+        # Tab 1: Configs (contains two existing config editors)
+        configs_tab = QWidget()
+        configs_v = QVBoxLayout(configs_tab)
+        self._config_frame_layout = QHBoxLayout()
+        configs_v.addLayout(self._config_frame_layout)
+        self.tabs.addTab(configs_tab, "Main")
 
         # Try config group
         left_config_group = QGroupBox("Config for Try Reconstruction")
@@ -147,7 +157,6 @@ class TomoGUI(QWidget):
         self.end_scan_input = QLineEdit()
         scan_range_layout.addWidget(self.end_scan_input)
         left_config_layout.addLayout(scan_range_layout)
-
         left_config_group.setLayout(left_config_layout)
 
         # Full config group
@@ -189,10 +198,19 @@ class TomoGUI(QWidget):
 
         right_config_group.setLayout(right_config_layout)
 
-        config_frame_layout.addWidget(left_config_group)
-        config_frame_layout.addWidget(right_config_group)
-        left_layout.addLayout(config_frame_layout)
+        # Place groups into "Configs" tab
+        self._config_frame_layout.addWidget(left_config_group)
+        self._config_frame_layout.addWidget(right_config_group)
 
+        # Tab 2: Params (all CLI flags + extra args)
+        self._build_params_tab()
+        self._build_rings_tab()
+        self._build_bhard_tab()
+        self._build_phase_tab()
+        self._build_Geometry_tab()
+        self._build_Data_tab()        
+        self._build_Performance_tab()
+        
         # Progress bar
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
@@ -365,13 +383,731 @@ class TomoGUI(QWidget):
         main_layout.addLayout(right_layout, 4)
         self.setLayout(main_layout)
 
+    # ===== PARAMS TAB =====
+    def _build_params_tab(self):
+        params_tab = QWidget()
+        outer = QVBoxLayout(params_tab)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        form_host = QWidget()
+        form = QFormLayout(form_host)
+        scroll.setWidget(form_host)
+        outer.addWidget(scroll)
+
+        self.param_widgets = {}
+
+        def add_line(flag, placeholder="", tip="", width=240):
+            w = QLineEdit()
+            if placeholder:
+                w.setPlaceholderText(placeholder)
+            if tip:
+                w.setToolTip(tip)
+            w.setFixedWidth(width)
+            self.param_widgets[flag] = ("line", w)
+            form.addRow(QLabel(flag), w)
+
+        def add_combo(flag, items, default=None, tip=""):
+            w = QComboBox()
+            w.addItems(items)
+            if default in items:
+                w.setCurrentText(default)
+            if tip:
+                w.setToolTip(tip)
+            self.param_widgets[flag] = ("combo", w)
+            form.addRow(QLabel(flag), w)
+
+        def add_check(flag, tip=""):
+            w = QCheckBox()
+            if tip:
+                w.setToolTip(tip)
+            self.param_widgets[flag] = ("check", w)
+            form.addRow(QLabel(flag), w)
+
+        def add_spin(flag, minv, maxv, step=1, default=None, tip=""):
+            w = QSpinBox()
+            w.setRange(minv, maxv)
+            w.setSingleStep(step)
+            if default is not None:
+                w.setValue(default)
+            if tip:
+                w.setToolTip(tip)
+            self.param_widgets[flag] = ("spin", w)
+            form.addRow(QLabel(flag), w)
+
+        def add_dspin(flag, minv, maxv, step=0.1, default=None, tip=""):
+            w = QDoubleSpinBox()
+            w.setDecimals(6)
+            w.setRange(minv, maxv)
+            w.setSingleStep(step)
+            if default is not None:
+                w.setValue(default)
+            if tip:
+                w.setToolTip(tip)
+            self.param_widgets[flag] = ("dspin", w)
+            form.addRow(QLabel(flag), w)
+
+        add_combo("--binning", ["0","1","2","3"], default="0")
+
+
+        add_combo("--file-type", ["standard","double_fov"], default="standard")
+
+
+        add_dspin("--bright-ratio", 0.0, 1e9, step=0.1, default=1.0)
+        add_dspin("--center-search-step", 0.0, 1e6, step=0.05, default=0.5)
+        add_dspin("--center-search-width", 0.0, 1e6, step=0.5, default=50.0)
+        add_spin("--dezinger", 0, 10000, step=1, default=0)
+        add_spin("--dezinger-threshold", 0, 1000000, step=100, default=5000)
+
+        add_combo("--fbp-filter", ["none","ramp","shepp","hann","hamming","parzen","cosine","cosine2"], default="parzen")
+        add_spin("--find-center-end-row", -1, 10_000_000, step=1, default=-1)
+        add_spin("--find-center-start-row", 0, 10_000_000, step=1, default=0)
+        add_combo("--flat-linear", ["False","True"], default="False")
+
+        add_combo("--minus-log", ["True","False"], default="True")
+
+        add_line("--nsino", "0.5 or [0,0.9]")
+
+#        add_dspin("--rotation-axis", -1e9, 1e9, step=0.01, default=-1.0)
+#        add_combo("--rotation-axis-auto", ["manual","auto"], default="manual")
+        add_combo("--rotation-axis-method", ["sift","vo"], default="sift")
+        add_line("--rotation-axis-pairs", "[0,1499] or [0,1499,749,2249]")
+        add_dspin("--rotation-axis-sift-threshold", 0.0, 1.0, step=0.01, default=0.5)
+
+
+        # Misc / algorithm
+        add_combo("--pre-processing", ["True","False"], default="True")
+        add_combo("--reconstruction-algorithm", ["fourierrec","linerec"], default="fourierrec")
+
+        self.tabs.addTab(params_tab, "Reconstruction")
+
+    def _gather_params_args(self):
+        args = []
+        for flag, (kind, w) in self.param_widgets.items():
+            if kind == "line":
+                val = w.text().strip()
+                if val != "":
+                    args += [flag, val]
+            elif kind == "combo":
+                args += [flag, w.currentText().strip()]
+            elif kind == "check":
+                if w.isChecked():
+                    args += [flag]
+            elif kind == "spin":
+                args += [flag, str(w.value())]
+            elif kind == "dspin":
+                args += [flag, str(w.value())]
+        return args
+
+
+# ===== Beam Hardening TAB =====
+    def _build_bhard_tab(self):
+        bhard_tab = QWidget()
+        outer = QVBoxLayout(bhard_tab)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        form_host = QWidget()
+        form = QFormLayout(form_host)
+        scroll.setWidget(form_host)
+        outer.addWidget(scroll)
+
+        self.bhard_widgets = {}
+
+        def add_line(flag, placeholder="", tip="", width=240):
+            w = QLineEdit()
+            if placeholder:
+                w.setPlaceholderText(placeholder)
+            if tip:
+                w.setToolTip(tip)
+            w.setFixedWidth(width)
+            self.bhard_widgets[flag] = ("line", w)
+            form.addRow(QLabel(flag), w)
+
+        def add_combo(flag, items, default=None, tip=""):
+            w = QComboBox()
+            w.addItems(items)
+            if default in items:
+                w.setCurrentText(default)
+            if tip:
+                w.setToolTip(tip)
+            self.bhard_widgets[flag] = ("combo", w)
+            form.addRow(QLabel(flag), w)
+
+        def add_check(flag, tip=""):
+            w = QCheckBox()
+            if tip:
+                w.setToolTip(tip)
+            self.bhard_widgets[flag] = ("check", w)
+            form.addRow(QLabel(flag), w)
+
+        def add_spin(flag, minv, maxv, step=1, default=None, tip=""):
+            w = QSpinBox()
+            w.setRange(minv, maxv)
+            w.setSingleStep(step)
+            if default is not None:
+                w.setValue(default)
+            if tip:
+                w.setToolTip(tip)
+            self.bhard_widgets[flag] = ("spin", w)
+            form.addRow(QLabel(flag), w)
+
+        def add_dspin(flag, minv, maxv, step=0.1, default=None, tip=""):
+            w = QDoubleSpinBox()
+            w.setDecimals(6)
+            w.setRange(minv, maxv)
+            w.setSingleStep(step)
+            if default is not None:
+                w.setValue(default)
+            if tip:
+                w.setToolTip(tip)
+            self.bhard_widgets[flag] = ("dspin", w)
+            form.addRow(QLabel(flag), w)
+
+        # Beam hardening / source & scintillator
+        add_combo("--beam-hardening-method", ["none","standard"], default="none")
+        add_combo("--calculate-source", ["none","standard"], default="none")
+        add_dspin("--b-storage-ring", 0.0, 10.0, step=0.001, default=0.599)
+        add_dspin("--e-storage-ring", 0.0, 50.0, step=0.1, default=7.0)
+        add_combo("--filter-1-auto", ["False","True"], default="False")
+        add_dspin("--filter-1-density", 0.0, 100.0, step=0.01, default=1.0)
+        add_line("--filter-1-material", "none/Al/Cu/...")
+        add_dspin("--filter-1-thickness", 0.0, 1e6, step=0.1, default=0.0)
+        add_combo("--filter-2-auto", ["False","True"], default="False")
+        add_dspin("--filter-2-density", 0.0, 100.0, step=0.01, default=1.0)
+        add_line("--filter-2-material", "none/Al/Cu/...")
+        add_dspin("--filter-2-thickness", 0.0, 1e6, step=0.1, default=0.0)
+        add_combo("--filter-3-auto", ["False","True"], default="False")
+        add_dspin("--filter-3-density", 0.0, 100.0, step=0.01, default=1.0)
+        add_line("--filter-3-material", "none")
+        add_dspin("--filter-3-thickness", 0.0, 1e6, step=0.1, default=0.0)
+        add_dspin("--maximum-E", 0.0, 1e9, step=1.0, default=200000.0)
+        add_dspin("--maximum-psi-urad", 0.0, 1e9, step=1.0, default=40.0)
+        add_dspin("--minimum-E", 0.0, 1e9, step=1.0, default=1000.0)
+        add_check("--read-pixel-size")
+        add_check("--read-scintillator")
+        add_dspin("--sample-density", 0.0, 100.0, step=0.01, default=1.0)
+        add_line("--sample-material", "Fe")
+        add_dspin("--scintillator-density", 0.0, 100.0, step=0.01, default=6.0)
+        add_line("--scintillator-material", "LuAG_Ce")
+        add_dspin("--scintillator-thickness", 0.0, 1e6, step=0.1, default=100.0)
+        add_dspin("--source-distance", 0.0, 1e9, step=0.1, default=36.0)
+        add_dspin("--step-E", 0.0, 1e9, step=1.0, default=500.0)
+
+        
+        self.tabs.addTab(bhard_tab, "Hardening")
+
+    def _gather_bhard_args(self):
+        args = []
+        for flag, (kind, w) in self.bhard_widgets.items():
+            if kind == "line":
+                val = w.text().strip()
+                if val != "":
+                    args += [flag, val]
+            elif kind == "combo":
+                args += [flag, w.currentText().strip()]
+            elif kind == "check":
+                if w.isChecked():
+                    args += [flag]
+            elif kind == "spin":
+                args += [flag, str(w.value())]
+            elif kind == "dspin":
+                args += [flag, str(w.value())]
+
+        return args
+        
+        
+# ===== Phase TAB =====
+    def _build_phase_tab(self):
+        phase_tab = QWidget()
+        outer = QVBoxLayout(phase_tab)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        form_host = QWidget()
+        form = QFormLayout(form_host)
+        scroll.setWidget(form_host)
+        outer.addWidget(scroll)
+
+        self.phase_widgets = {}
+
+        def add_line(flag, placeholder="", tip="", width=240):
+            w = QLineEdit()
+            if placeholder:
+                w.setPlaceholderText(placeholder)
+            if tip:
+                w.setToolTip(tip)
+            w.setFixedWidth(width)
+            self.phase_widgets[flag] = ("line", w)
+            form.addRow(QLabel(flag), w)
+
+        def add_combo(flag, items, default=None, tip=""):
+            w = QComboBox()
+            w.addItems(items)
+            if default in items:
+                w.setCurrentText(default)
+            if tip:
+                w.setToolTip(tip)
+            self.phase_widgets[flag] = ("combo", w)
+            form.addRow(QLabel(flag), w)
+
+        def add_check(flag, tip=""):
+            w = QCheckBox()
+            if tip:
+                w.setToolTip(tip)
+            self.phase_widgets[flag] = ("check", w)
+            form.addRow(QLabel(flag), w)
+
+        def add_spin(flag, minv, maxv, step=1, default=None, tip=""):
+            w = QSpinBox()
+            w.setRange(minv, maxv)
+            w.setSingleStep(step)
+            if default is not None:
+                w.setValue(default)
+            if tip:
+                w.setToolTip(tip)
+            self.phase_widgets[flag] = ("spin", w)
+            form.addRow(QLabel(flag), w)
+
+        def add_dspin(flag, minv, maxv, step=0.1, default=None, tip=""):
+            w = QDoubleSpinBox()
+            w.setDecimals(6)
+            w.setRange(minv, maxv)
+            w.setSingleStep(step)
+            if default is not None:
+                w.setValue(default)
+            if tip:
+                w.setToolTip(tip)
+            self.phase_widgets[flag] = ("dspin", w)
+            form.addRow(QLabel(flag), w)
+
+        # Phase retrieval   
+        add_combo("--retrieve-phase-method", ["none","paganin","Gpaganin"], default="none")
+        add_dspin("--pixel-size", 0.0, 1e9, step=0.01, default=0.0)        
+        add_dspin("--energy", 0.0, 1e6, step=0.1, default=0.0)
+        add_dspin("--propagation-distance", 0.0, 1e6, step=0.1, default=0.0)        
+        add_dspin("--retrieve-phase-W", 0.0, 1.0, step=0.0001, default=0.0002)
+        add_dspin("--retrieve-phase-alpha", 0.0, 1e6, step=0.0001, default=0.0)
+        add_dspin("--retrieve-phase-delta-beta", 0.0, 1e9, step=0.1, default=1500.0)
+        add_spin("--retrieve-phase-pad", 0, 1024, step=1, default=1)
+  
+        self.tabs.addTab(phase_tab, "Phase")
+
+    def _gather_phase_args(self):
+        args = []
+        for flag, (kind, w) in self.phase_widgets.items():
+            if kind == "line":
+                val = w.text().strip()
+                if val != "":
+                    args += [flag, val]
+            elif kind == "combo":
+                args += [flag, w.currentText().strip()]
+            elif kind == "check":
+                if w.isChecked():
+                    args += [flag]
+            elif kind == "spin":
+                args += [flag, str(w.value())]
+            elif kind == "dspin":
+                args += [flag, str(w.value())]
+
+        return args        
+
+    # ===== RINGS TAB =====
+    def _build_rings_tab(self):
+        rings_tab = QWidget()
+        outer = QVBoxLayout(rings_tab)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        form_host = QWidget()
+        form = QFormLayout(form_host)
+        scroll.setWidget(form_host)
+        outer.addWidget(scroll)
+
+        self.rings_widgets = {}
+
+        def add_line(flag, placeholder="", tip="", width=240):
+            w = QLineEdit()
+            if placeholder:
+                w.setPlaceholderText(placeholder)
+            if tip:
+                w.setToolTip(tip)
+            w.setFixedWidth(width)
+            self.rings_widgets[flag] = ("line", w)
+            form.addRow(QLabel(flag), w)
+
+        def add_combo(flag, items, default=None, tip=""):
+            w = QComboBox()
+            w.addItems(items)
+            if default in items:
+                w.setCurrentText(default)
+            if tip:
+                w.setToolTip(tip)
+            self.rings_widgets[flag] = ("combo", w)
+            form.addRow(QLabel(flag), w)
+
+        def add_check(flag, tip=""):
+            w = QCheckBox()
+            if tip:
+                w.setToolTip(tip)
+            self.rings_widgets[flag] = ("check", w)
+            form.addRow(QLabel(flag), w)
+
+        def add_spin(flag, minv, maxv, step=1, default=None, tip=""):
+            w = QSpinBox()
+            w.setRange(minv, maxv)
+            w.setSingleStep(step)
+            if default is not None:
+                w.setValue(default)
+            if tip:
+                w.setToolTip(tip)
+            self.rings_widgets[flag] = ("spin", w)
+            form.addRow(QLabel(flag), w)
+
+        def add_dspin(flag, minv, maxv, step=0.1, default=None, tip=""):
+            w = QDoubleSpinBox()
+            w.setDecimals(6)
+            w.setRange(minv, maxv)
+            w.setSingleStep(step)
+            if default is not None:
+                w.setValue(default)
+            if tip:
+                w.setToolTip(tip)
+            self.rings_widgets[flag] = ("dspin", w)
+            form.addRow(QLabel(flag), w)
+
+        # Stripe/ring filters
+        add_combo("--remove-stripe-method", ["none","fw","ti","vo-all"], default="none")        
+        add_combo("--fw-filter", ["haar","db5","sym5","sym16"], default="sym16")
+        add_spin("--fw-level", 0, 64, step=1, default=7)
+        add_check("--fw-pad")
+        add_dspin("--fw-sigma", 0.0, 100.0, step=0.1, default=1.0)
+        add_dspin("--ti-beta", 0.0, 1.0, step=0.001, default=0.022)
+        add_dspin("--ti-mask", 0.0, 1.0, step=0.01, default=1.0)
+        add_spin("--vo-all-dim", 1, 3, step=1, default=1)
+        add_spin("--vo-all-la-size", 1, 4096, step=2, default=61)
+        add_spin("--vo-all-sm-size", 1, 4096, step=2, default=21)
+        add_dspin("--vo-all-snr", 0.0, 100.0, step=0.1, default=3.0)
+
+        self.tabs.addTab(rings_tab, "Rings")
+
+    def _gather_rings_args(self):
+        args = []
+        for flag, (kind, w) in self.rings_widgets.items():
+            if kind == "line":
+                val = w.text().strip()
+                if val != "":
+                    args += [flag, val]
+            elif kind == "combo":
+                args += [flag, w.currentText().strip()]
+            elif kind == "check":
+                if w.isChecked():
+                    args += [flag]
+            elif kind == "spin":
+                args += [flag, str(w.value())]
+            elif kind == "dspin":
+                args += [flag, str(w.value())]
+
+        return args
+
+# ===== Geometry TAB =====
+    def _build_Geometry_tab(self):
+        Geometry_tab = QWidget()
+        outer = QVBoxLayout(Geometry_tab)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        form_host = QWidget()
+        form = QFormLayout(form_host)
+        scroll.setWidget(form_host)
+        outer.addWidget(scroll)
+
+        self.Geometry_widgets = {}
+
+        def add_line(flag, placeholder="", tip="", width=240):
+            w = QLineEdit()
+            if placeholder:
+                w.setPlaceholderText(placeholder)
+            if tip:
+                w.setToolTip(tip)
+            w.setFixedWidth(width)
+            self.Geometry_widgets[flag] = ("line", w)
+            form.addRow(QLabel(flag), w)
+
+        def add_combo(flag, items, default=None, tip=""):
+            w = QComboBox()
+            w.addItems(items)
+            if default in items:
+                w.setCurrentText(default)
+            if tip:
+                w.setToolTip(tip)
+            self.Geometry_widgets[flag] = ("combo", w)
+            form.addRow(QLabel(flag), w)
+
+        def add_check(flag, tip=""):
+            w = QCheckBox()
+            if tip:
+                w.setToolTip(tip)
+            self.Geometry_widgets[flag] = ("check", w)
+            form.addRow(QLabel(flag), w)
+
+        def add_spin(flag, minv, maxv, step=1, default=None, tip=""):
+            w = QSpinBox()
+            w.setRange(minv, maxv)
+            w.setSingleStep(step)
+            if default is not None:
+                w.setValue(default)
+            if tip:
+                w.setToolTip(tip)
+            self.Geometry_widgets[flag] = ("spin", w)
+            form.addRow(QLabel(flag), w)
+
+        def add_dspin(flag, minv, maxv, step=0.1, default=None, tip=""):
+            w = QDoubleSpinBox()
+            w.setDecimals(6)
+            w.setRange(minv, maxv)
+            w.setSingleStep(step)
+            if default is not None:
+                w.setValue(default)
+            if tip:
+                w.setToolTip(tip)
+            self.Geometry_widgets[flag] = ("dspin", w)
+            form.addRow(QLabel(flag), w)
+
+        # Geometry & lamino
+        add_line("--blocked-views", "[[0,1.2],[3,3.14]]")        
+        add_dspin("--rotate-proj-angle", -360.0, 360.0, step=0.1, default=0.0)
+        add_spin("--rotate-proj-order", 0, 5, step=1, default=1)        
+        add_dspin("--lamino-angle", -90, 90.0, step=0.01, default=0.0)
+        add_spin("--lamino-end-row", -1, 10_000_000, step=1, default=-1)
+        add_dspin("--lamino-search-step", 0.0, 1e6, step=0.01, default=0.25)
+        add_dspin("--lamino-search-width", 0.0, 1e6, step=0.1, default=5.0)
+        add_spin("--lamino-start-row", 0, 10_000_000, step=1, default=0)
+  
+        self.tabs.addTab(Geometry_tab, "Geometry")
+
+    def _gather_Geometry_args(self):
+        args = []
+        for flag, (kind, w) in self.Geometry_widgets.items():
+            if kind == "line":
+                val = w.text().strip()
+                if val != "":
+                    args += [flag, val]
+            elif kind == "combo":
+                args += [flag, w.currentText().strip()]
+            elif kind == "check":
+                if w.isChecked():
+                    args += [flag]
+            elif kind == "spin":
+                args += [flag, str(w.value())]
+            elif kind == "dspin":
+                args += [flag, str(w.value())]
+
+        return args        
+
+# ===== Data TAB =====
+    def _build_Data_tab(self):
+        Data_tab = QWidget()
+        outer = QVBoxLayout(Data_tab)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        form_host = QWidget()
+        form = QFormLayout(form_host)
+        scroll.setWidget(form_host)
+        outer.addWidget(scroll)
+
+        self.data_widgets = {}
+
+        def add_line(flag, placeholder="", tip="", width=240):
+            w = QLineEdit()
+            if placeholder:
+                w.setPlaceholderText(placeholder)
+            if tip:
+                w.setToolTip(tip)
+            w.setFixedWidth(width)
+            self.data_widgets[flag] = ("line", w)
+            form.addRow(QLabel(flag), w)
+
+        def add_combo(flag, items, default=None, tip=""):
+            w = QComboBox()
+            w.addItems(items)
+            if default in items:
+                w.setCurrentText(default)
+            if tip:
+                w.setToolTip(tip)
+            self.data_widgets[flag] = ("combo", w)
+            form.addRow(QLabel(flag), w)
+
+        def add_check(flag, tip=""):
+            w = QCheckBox()
+            if tip:
+                w.setToolTip(tip)
+            self.data_widgets[flag] = ("check", w)
+            form.addRow(QLabel(flag), w)
+
+        def add_spin(flag, minv, maxv, step=1, default=None, tip=""):
+            w = QSpinBox()
+            w.setRange(minv, maxv)
+            w.setSingleStep(step)
+            if default is not None:
+                w.setValue(default)
+            if tip:
+                w.setToolTip(tip)
+            self.data_widgets[flag] = ("spin", w)
+            form.addRow(QLabel(flag), w)
+
+        def add_dspin(flag, minv, maxv, step=0.1, default=None, tip=""):
+            w = QDoubleSpinBox()
+            w.setDecimals(6)
+            w.setRange(minv, maxv)
+            w.setSingleStep(step)
+            if default is not None:
+                w.setValue(default)
+            if tip:
+                w.setToolTip(tip)
+            self.data_widgets[flag] = ("dspin", w)
+            form.addRow(QLabel(flag), w)
+
+        add_line("--dark-file-name", "/path/dark.h5")
+        add_line("--flat-file-name", "/path/flat.h5")
+        add_line("--out-path-name", "/path/out")
+        add_combo("--save-format", ["tiff","h5","h5sino","h5nolinks"], default="tiff")
+        add_check("--config-update")
+        add_line("--logs-home", "/home/user/logs")
+        add_check("--verbose")
+        
+        self.tabs.addTab(Data_tab, "Data")
+
+    def _gather_Data_args(self):
+        args = []
+        for flag, (kind, w) in self.data_widgets.items():
+            if kind == "line":
+                val = w.text().strip()
+                if val != "":
+                    args += [flag, val]
+            elif kind == "combo":
+                args += [flag, w.currentText().strip()]
+            elif kind == "check":
+                if w.isChecked():
+                    args += [flag]
+            elif kind == "spin":
+                args += [flag, str(w.value())]
+            elif kind == "dspin":
+                args += [flag, str(w.value())]
+
+        return args        
+
+
+
+
+# ===== Performance TAB =====
+    def _build_Performance_tab(self):
+        Performance_tab = QWidget()
+        outer = QVBoxLayout(Performance_tab)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        form_host = QWidget()
+        form = QFormLayout(form_host)
+        scroll.setWidget(form_host)
+        outer.addWidget(scroll)
+
+        self.perf_widgets = {}
+
+        def add_line(flag, placeholder="", tip="", width=240):
+            w = QLineEdit()
+            if placeholder:
+                w.setPlaceholderText(placeholder)
+            if tip:
+                w.setToolTip(tip)
+            w.setFixedWidth(width)
+            self.perf_widgets[flag] = ("line", w)
+            form.addRow(QLabel(flag), w)
+
+        def add_combo(flag, items, default=None, tip=""):
+            w = QComboBox()
+            w.addItems(items)
+            if default in items:
+                w.setCurrentText(default)
+            if tip:
+                w.setToolTip(tip)
+            self.perf_widgets[flag] = ("combo", w)
+            form.addRow(QLabel(flag), w)
+
+        def add_check(flag, tip=""):
+            w = QCheckBox()
+            if tip:
+                w.setToolTip(tip)
+            self.perf_widgets[flag] = ("check", w)
+            form.addRow(QLabel(flag), w)
+
+        def add_spin(flag, minv, maxv, step=1, default=None, tip=""):
+            w = QSpinBox()
+            w.setRange(minv, maxv)
+            w.setSingleStep(step)
+            if default is not None:
+                w.setValue(default)
+            if tip:
+                w.setToolTip(tip)
+            self.perf_widgets[flag] = ("spin", w)
+            form.addRow(QLabel(flag), w)
+
+        def add_dspin(flag, minv, maxv, step=0.1, default=None, tip=""):
+            w = QDoubleSpinBox()
+            w.setDecimals(6)
+            w.setRange(minv, maxv)
+            w.setSingleStep(step)
+            if default is not None:
+                w.setValue(default)
+            if tip:
+                w.setToolTip(tip)
+            self.perf_widgets[flag] = ("dspin", w)
+            form.addRow(QLabel(flag), w)
+
+        # Perfomance related settings
+        add_combo("--clear-folder", ["False","True"], default="False")
+        add_combo("--dtype", ["float32","float16"], default="float32")
+        add_spin("--end-column", -1, 10_000_000, step=1, default=-1)
+        add_spin("--end-proj", -1, 10_000_000, step=1, default=-1)
+        add_spin("--end-row", -1, 10_000_000, step=1, default=-1)
+        add_spin("--nproj-per-chunk", 1, 65535, step=1, default=8)        
+        add_spin("--nsino-per-chunk", 1, 65535, step=1, default=8)        
+        add_spin("--max-read-threads", 1, 1024, step=1, default=4)
+        add_spin("--max-write-threads", 1, 1024, step=1, default=8)        
+        add_spin("--start-column", 0, 10_000_000, step=1, default=0)
+        add_spin("--start-proj", 0, 10_000_000, step=1, default=0)
+        add_spin("--start-row", 0, 10_000_000, step=1, default=0)
+  
+        self.tabs.addTab(Performance_tab, "Performance")
+
+    def _gather_Performance_args(self):
+        args = []
+        for flag, (kind, w) in self.perf_widgets.items():
+            if kind == "line":
+                val = w.text().strip()
+                if val != "":
+                    args += [flag, val]
+            elif kind == "combo":
+                args += [flag, w.currentText().strip()]
+            elif kind == "check":
+                if w.isChecked():
+                    args += [flag]
+            elif kind == "spin":
+                args += [flag, str(w.value())]
+            elif kind == "dspin":
+                args += [flag, str(w.value())]
+
+        return args        
+
+
     # ===== HELPER METHODS =====
     
     def help_tomo(self):
         """Run the CLI `tomocupy recon (or recon_steps) -h` and show output in the GUI log."""
         name = "tomocupy-help"
         recon_way = self.recon_way_box.currentText()
-        self.log_output.append(f"📖[{name}] tomocupy {recon_way} -h")
+        self.log_output.append(f"\U0001f4d6[{name}] tomocupy {recon_way} -h")
 
         p = QProcess(self)
         p.setProcessChannelMode(QProcess.SeparateChannels)
@@ -392,12 +1128,12 @@ class TomoGUI(QWidget):
                 self.process[:] = [(pp, nn) for (pp, nn) in self.process if pp is not p]
             except Exception:
                 pass
-            self.log_output.append(f"✅[{name}] done." if code == 0
-                                else f"❌[{name}] failed with code {code}.")
+            self.log_output.append(f"\u2705[{name}] done." if code == 0
+                                else f"\u274c[{name}] failed with code {code}.")
 
         p.finished.connect(_done)
         p.errorOccurred.connect(
-            lambda _err: self.log_output.append(f"❌[{name}] {p.errorString()}")
+            lambda _err: self.log_output.append(f"\u274c[{name}] {p.errorString()}")
         )
 
         if not isinstance(self.process, list):
@@ -430,11 +1166,9 @@ class TomoGUI(QWidget):
 
     def refresh_current_image(self):
         if self.full_files and 0 <= self.slice_slider.value() < len(self.full_files):
-            self.show_image(img_path=self.full_files[self.slice_slider.value()],flag=None)
+            self.show_image(self.full_files[self.slice_slider.value()], flag=None)
         elif self.preview_files and 0 <= self.slice_slider.value() < len(self.preview_files):
-            self.show_image(img_path=self.preview_files[self.slice_slider.value()],flag=None)
-        elif self.raw_files_num and 0 <= self.slice_slider.value() < self.raw_files_num:
-            self.show_image(img_path=self._raw_h5['/exchange/data'][:][self.slice_slider.value(),:,:], flag="raw")
+            self.show_image(self.preview_files[self.slice_slider.value()], flag=None)
 
     def highlight_editor(self, editor, event):
         editor.setStyleSheet("QTextEdit { border: 2px solid green; font-size: 12.5pt; }")
@@ -492,7 +1226,7 @@ class TomoGUI(QWidget):
 
     def abort_process(self):
         if not self.process:
-            self.log_output.append("ℹ️[INFO] No running process.")
+            self.log_output.append("\u2139\ufe0f[INFO] No running process.")
             return
 
         for p, name in list(self.process):
@@ -504,7 +1238,7 @@ class TomoGUI(QWidget):
                 if not p.waitForFinished(2000):
                     p.kill()
                     p.waitForFinished(2000)
-            self.log_output.append(f"⛔ [{name}] aborted.")
+            self.log_output.append(f"\u26d4 [{name}] aborted.")
 
         self.process.clear()
 
@@ -522,7 +1256,7 @@ class TomoGUI(QWidget):
         name = f"{job_label}-{scan_id}" if scan_id else job_label
 
         cli_str = " ".join(map(str, cmd))
-        self.log_output.append(f"🚀 [{name}] start: {cli_str}")
+        self.log_output.append(f"\U0001f680 [{name}] start: {cli_str}")
         QApplication.processEvents()
 
         p = QProcess(self)
@@ -537,7 +1271,7 @@ class TomoGUI(QWidget):
             except Exception:
                 pass
             if code != 0:
-                self.log_output.append(f"❌ [{name}] failed with code {code}.")
+                self.log_output.append(f"\u274c [{name}] failed with code {code}.")
             result["code"] = code
             if loop is not None:
                 loop.quit()
@@ -547,7 +1281,7 @@ class TomoGUI(QWidget):
                 result["code"] = -1
             if loop is not None:
                 loop.quit()
-            self.log_output.append(f"❌ [{name}] {p.errorString()}")
+            self.log_output.append(f"\u274c [{name}] {p.errorString()}")
 
         p.finished.connect(on_finished)
         p.errorOccurred.connect(on_error)
@@ -569,65 +1303,73 @@ class TomoGUI(QWidget):
     def try_reconstruction(self):
         proj_file = self.proj_file_box.currentData()
         if not proj_file:
-            self.log_output.append(f"❌ No file")
+            self.log_output.append(f"\u274c No file")
             return
         recon_way = self.recon_way_box.currentText()
         cor_method = self.cor_method_box.currentText()
         cor_val = self.cor_input.text().strip()
         if cor_method == "auto":
             if cor_val:
-                self.log_output.append(f"❌ no manual cor for auto method")
+                self.log_output.append(f"\u274c no manual cor for auto method")
                 return
         else:
             try:
                 cor = float(cor_val)
             except ValueError:
-                self.log_output.append(f"❌ wrong rotation axis input")
+                self.log_output.append(f"\u274c wrong rotation axis input")
                 return
         config_text = self.config_editor_try.toPlainText()
         if not config_text.strip():
-            self.log_output.append("⚠️ not use conf")
+            self.log_output.append("\u26a0\ufe0f not use conf")
         temp_try = os.path.join(self.data_path.text(), "temp_try.conf")
         with open(temp_try, "w") as f:
             f.write(config_text)
+
+        # Base command
+        cmd = ["tomocupy", str(recon_way), 
+               "--reconstruction-type", "try", 
+               "--config", temp_try, 
+               "--file-name", proj_file]
         if cor_method == "auto":
-            cmd = ["tomocupy", str(recon_way), 
-                "--reconstruction-type", "try", 
-                "--config", temp_try, 
-                "--file-name", proj_file,
-                "--rotation-axis-auto", str(cor_method)]
+            cmd += ["--rotation-axis-auto", "auto"]
         else:
-            cmd = ["tomocupy", str(recon_way), 
-                "--reconstruction-type", "try", 
-                "--config", temp_try, 
-                "--file-name", proj_file,
-                "--rotation-axis-method", str(cor_method),
-                "--rotation-axis", str(cor)]
+            cmd += ["--rotation-axis-auto", "manual",
+                    "--rotation-axis", str(cor)]
+
+        # Append tabs selections
+        cmd += self._gather_params_args()
+        cmd += self._gather_rings_args()
+        cmd += self._gather_bhard_args()
+        cmd += self._gather_phase_args()
+        cmd += self._gather_Geometry_args()
+        cmd += self._gather_Data_args()                        
+        cmd += self._gather_Performance_args()
+                                
         code = self.run_command_live(cmd, proj_file=proj_file, job_label="Try recon", wait=True)
         try:
             if code == 0:
-                self.log_output.append(f"✅ Done try recon {proj_file}")
+                self.log_output.append(f"\u2705 Done try recon {proj_file}")
             else:
-                self.log_output.append(f"❌ Try recon {proj_file} failed.")
+                self.log_output.append(f"\u274c Try recon {proj_file} failed.")
         finally:
             try:
                 if os.path.exists(temp_try):
                     os.remove(temp_try)
-                    self.log_output.append(f"🧹 Removed {temp_try}")
+                    self.log_output.append(f"\U0001f9f9 Removed {temp_try}")
             except Exception as e:
-                self.log_output.append(f"⚠️ Could not remove {temp_try}: {e}")
+                self.log_output.append(f"\u26a0\ufe0f Could not remove {temp_try}: {e}")
 
     def full_reconstruction(self):
         proj_file = self.proj_file_box.currentData()
-        recon_way = self.recon_way_box.currentData()
+        recon_way = self.recon_way_box.currentText()  # fixed (was currentData)
         try:
             cor_value = float(self.cor_input_full.text())
         except ValueError:
-            self.log_output.append("❌[ERROR] Invalid Full COR value.")
+            self.log_output.append("\u274c[ERROR] Invalid Full COR value.")
             return
         config_text = self.config_editor_full.toPlainText()
         if not config_text.strip():
-            self.log_output.append("⚠️ not use conf.")
+            self.log_output.append("\u26a0\ufe0f not use conf.")
         temp_full = os.path.join(self.data_path.text(), "temp_full.conf")
         with open(temp_full, "w") as f:
             f.write(config_text)
@@ -636,19 +1378,28 @@ class TomoGUI(QWidget):
                "--config", temp_full, 
                "--file-name", proj_file, 
                "--rotation-axis", str(cor_value)]
+        # Append tabs selections
+        cmd += self._gather_params_args()
+        cmd += self._gather_rings_args()
+        cmd += self._gather_bhard_args()
+        cmd += self._gather_phase_args()
+        cmd += self._gather_Geometry_args()        
+        cmd += self._gather_Data_args()                
+        cmd += self._gather_Performance_args()
+                                
         code = self.run_command_live(cmd, proj_file=proj_file, job_label="Full recon", wait=True)
         try:
             if code == 0:
-                self.log_output.append(f"✅ Done full recon {proj_file}")
+                self.log_output.append(f"\u2705 Done full recon {proj_file}")
             else:
-                self.log_output.append(f"❌ Full recon {proj_file} failed.")
+                self.log_output.append(f"\u274c Full recon {proj_file} failed.")
         finally:
             try:
                 if os.path.exists(temp_full):
                     os.remove(temp_full)
-                    self.log_output.append(f"🧹 Removed {temp_full}")
+                    self.log_output.append(f"\U0001f9f9 Removed {temp_full}")
             except Exception as e:
-                self.log_output.append(f"⚠️ Could not remove {temp_full}: {e}")
+                self.log_output.append(f"\u26a0\ufe0f Could not remove {temp_full}: {e}")
         self.view_btn.setEnabled(True)
 
     def batch_try_reconstruction(self):
@@ -657,85 +1408,89 @@ class TomoGUI(QWidget):
             end_num = int(self.end_scan_input.text())
             total = end_num - start_num + 1
         except ValueError:
-            self.log_output.append("❌[ERROR] Invalid start or end scan number.")
+            self.log_output.append("\u274c[ERROR] Invalid start or end scan number.")
             return
 
         folder = self.data_path.text()
         if not os.path.isdir(folder):
-            self.log_output.append("❌[ERROR] Invalid data folder.")
+            self.log_output.append("\u274c[ERROR] Invalid data folder.")
             return
         recon_way = self.recon_way_box.currentText()
-        cor_method = self.cor_method_box.currenText()
+        cor_method = self.cor_method_box.currentText()  # fixed (was currenText)
         cor_val = self.cor_input.text().strip()
+        cor = None
         if cor_method == 'auto':
             if cor_val:
-                self.log_output.append(f"❌ no manual cor for auto method")
+                self.log_output.append(f"\u274c no manual cor for auto method")
                 return
         else:
             try:
                 cor = float(cor_val)
             except ValueError:
-                self.log_output.append(f"❌ wrong rotation axis input")
+                self.log_output.append(f"\u274c wrong rotation axis input")
                 return
         config_text = self.config_editor_try.toPlainText()
         if not config_text.strip():
-            self.log_output.append("⚠️ not use conf.")
+            self.log_output.append("\u26a0\ufe0f not use conf.")
         temp_try = os.path.join(folder, "temp_batch_try.conf")
         with open(temp_try, "w") as f:
             f.write(config_text)
         summary = {"done": [], "fail": [], 'no_file': []}
-        if cor_method == "auto":
-            cmd = ["tomocupy", str(recon_way), 
-                    "--reconstruction-type", "try", 
-                    "--config", temp_try, 
-                    "--file-name", proj_file,
-                    "--rotation-axis-auto", str(cor_method)
-                    ]
-        else:
-            cmd = ["tomocupy", str(recon_way), 
-                    "--reconstruction-type", "try", 
-                    "--config", temp_try, 
-                    "--file-name", proj_file,
-                    "--rotation-axis-auto", str(cor_method),
-                    "--rotation-axis", str(cor)
-                    ]
         try:
             for i, scan_num in enumerate(range(start_num, end_num + 1), start=1):
                 scan_str = f"{scan_num:04d}"
                 match_files = glob.glob(os.path.join(folder, f"*{scan_str}.h5"))
                 if not match_files:
-                    self.log_output.append(f"⚠️[WARN] No file found for scan {scan_str}, skipping.")
+                    self.log_output.append(f"\u26a0\ufe0f[WARN] No file found for scan {scan_str}, skipping.")
                     summary['no_file'].append(scan_str)
                     continue
                 proj_file = match_files[0]
+                cmd = ["tomocupy", str(recon_way), 
+                       "--reconstruction-type", "try", 
+                       "--config", temp_try, 
+                       "--file-name", proj_file]
+                if cor_method == "auto":
+                    cmd += ["--rotation-axis-auto", "auto"]
+                else:
+                    cmd += ["--rotation-axis-auto", "manual",
+                            "--rotation-axis", str(cor)]
+                # Append Params
+                cmd += self._gather_params_args()
+                cmd += self._gather_rings_args()
+                cmd += self._gather_bhard_args()
+                cmd += self._gather_phase_args()
+                cmd += self._gather_Geometry_args()      
+                cmd += self._gather_Data_args()                                          
+                cmd += self._gather_Performance_args()
+                                
                 code = self.run_command_live(cmd, proj_file=proj_file, job_label=f'batch try {i}/{total}', wait=True)
                 if code == 0:
-                    self.log_output.append(f"✅ Done try recon {proj_file}")
+                    self.log_output.append(f"\u2705 Done try recon {proj_file}")
                     summary['done'].append(scan_str)
                 else:
-                    self.log_output.append(f"❌ Try recon {proj_file} failed.")
+                    self.log_output.append(f"\u274c Try recon {proj_file} failed.")
                     summary['fail'].append(scan_str)
         finally:
             try:
                 if os.path.exists(temp_try):
                     os.remove(temp_try)
-                    self.log_output.append(f"🧹 Removed {temp_try}")
+                    self.log_output.append(f"\U0001f9f9 Removed {temp_try}")
             except Exception as e:
-                self.log_output.append(f"⚠️ Could not remove {temp_try}: {e}")
-            self.log_output.append(f"✅Done batch try, check summary: {str(summary)}")
+                self.log_output.append(f"\u26a0\ufe0f Could not remove {temp_try}: {e}")
+            self.log_output.append(f"\u2705Done batch try, check summary: {str(summary)}")
 
     def batch_full_reconstruction(self):
         """use cor_log.json and the config file in the right config txt box files to do 
             batch recon and delete cor_log.json and temp_full.conf after batch"""
         log_file = os.path.join(self.data_path.text(), "rot_cen.json")
         if not os.path.exists(log_file):
-            self.log_output.append("❌[ERROR] rot_cen.json not found.")
+            self.log_output.append("\u274c[ERROR] rot_cen.json not found.")
             return
         with open(log_file) as f:
             data = json.load(f)
         config_text = self.config_editor_full.toPlainText()
         if not config_text.strip():
-            self.log_output.append("⚠️ not use conf.")
+            self.log_output.append("\u26a0\ufe0f not use conf.")
         temp_full = os.path.join(self.data_path.text(), "temp_full.conf")
         with open(temp_full, "w") as f:
             f.write(config_text)
@@ -743,26 +1498,35 @@ class TomoGUI(QWidget):
         size = len(data)
         try:
             for i, (proj_file, cor_value) in enumerate(data.items(), start=1):
-                cmd = ["tomocupy", "recon", 
+                cmd = ["tomocupy", self.recon_way_box.currentText(), 
                     "--reconstruction-type", "full", 
                     "--config", temp_full, 
                     "--file-name", proj_file, 
                     "--rotation-axis", str(cor_value)]
+                # Append Params
+                cmd += self._gather_params_args()
+                cmd += self._gather_rings_args()
+                cmd += self._gather_bhard_args()
+                cmd += self._gather_phase_args()
+                cmd += self._gather_Geometry_args()        
+                cmd += self._gather_Data_args()                                        
+                cmd += self._gather_Performance_args()
+                                                        	
                 code = self.run_command_live(cmd, proj_file=proj_file, job_label=f"batch full {i}/{size}", wait=True)
                 if code == 0:
-                    self.log_output.append(f"✅ Done full recon {proj_file}")
+                    self.log_output.append(f"\u2705 Done full recon {proj_file}")
                     summary['done'].append(f"{os.path.basename(proj_file)}")
                 else:
-                    self.log_output.append(f"❌ full recon {proj_file} failed")
+                    self.log_output.append(f"\u274c full recon {proj_file} failed")
                     summary['fail'].append(f"{os.path.basename(proj_file)}")                
         finally:
             try:
                 if os.path.exists(temp_full):
                     os.remove(temp_full)
-                    self.log_output.append(f"🧹 Removed {temp_full}")
+                    self.log_output.append(f"\U0001f9f9 Removed {temp_full}")
             except Exception as e:
-                self.log_output.append(f"⚠️ Could not remove {temp_full}: {e}")
-            self.log_output.append(f"✅Done batch full, check summary: {str(summary)}")
+                self.log_output.append(f"\u26a0\ufe0f Could not remove {temp_full}: {e}")
+            self.log_output.append(f"\u2705Done batch full, check summary: {str(summary)}")
 
     # ===== COR MANAGEMENT =====
     def record_cor_to_json(self):
@@ -771,13 +1535,13 @@ class TomoGUI(QWidget):
         proj_file = self.proj_file_box.currentData()
 
         if not (data_folder and cor_value and proj_file):
-            self.log_output.append("⚠️[WARNING] Missing data folder, COR, or projection file.")
+            self.log_output.append("\u26a0\ufe0f[WARNING] Missing data folder, COR, or projection file.")
             return
 
         try:
             cor_value = float(cor_value)
         except ValueError:
-            self.log_output.append("❌[ERROR] COR value is not a valid number.")
+            self.log_output.append("\u274c[ERROR] COR value is not a valid number.")
             return
 
         json_path = os.path.join(data_folder, "rot_cen.json")
@@ -802,16 +1566,16 @@ class TomoGUI(QWidget):
             overfn_msg_box.setDefaultButton(QMessageBox.No)
             result = overfn_msg_box.exec()
             if result != QMessageBox.Yes:
-                self.log_output.append("⚠️Not take COR")
+                self.log_output.append("\u26a0\ufe0fNot take COR")
                 return
                 
         self.cor_data[proj_file] = cor_value
         try:
             with open(json_path, "w") as f:
                 json.dump(self.cor_data, f, indent=2)
-            self.log_output.append(f"✅[INFO] COR saved for: {proj_file}")
+            self.log_output.append(f"\u2705[INFO] COR saved for: {proj_file}")
         except Exception as e:
-            self.log_output.append(f"❌[ERROR] Failed to save rot_cen.json: {e}")
+            self.log_output.append(f"\u274c[ERROR] Failed to save rot_cen.json: {e}")
             return
 
         self.cor_json_output.clear()
@@ -825,7 +1589,7 @@ class TomoGUI(QWidget):
         json_path = os.path.join(data_folder, "rot_cen.json")
 
         if not os.path.exists(json_path):
-            self.log_output.append("⚠️[WARNING] no rot_cen.json")
+            self.log_output.append("\u26a0\ufe0f[WARNING] no rot_cen.json")
             with open(json_path, "w") as f:
                 json.dump(self.cor_data, f, indent=2)
 
@@ -837,24 +1601,32 @@ class TomoGUI(QWidget):
                 base = os.path.splitext(os.path.basename(k))[0]
                 last4 = base[-4:]
                 self.cor_json_output.append(f"{last4} : {v}")
-            self.log_output.append("✅[INFO] COR log reloaded.")
+            self.log_output.append("\u2705[INFO] COR log reloaded.")
         except Exception as e:
-            self.log_output.append(f"❌[ERROR] Failed to load COR log: {e}")
+            self.log_output.append(f"\u274c[ERROR] Failed to load COR log: {e}")
 
     # ===== IMAGE VIEWING =====
     def view_raw(self):
         "use h5py read, assume same structure for aps IMG"
-        data_folder = self.data_path.text().strip()
         proj_file = self.proj_file_box.currentData()
-        raw_fn = os.path.join(data_folder, proj_file)
-        self._raw_h5 = h5py.File(raw_fn,"r")
-        self.raw_files_num = self._raw_h5['/exchange/data'].shape[0] #number of projections
-        self.dark = self._raw_h5['/exchange/data_dark'][:].mean(axis=0)
-        self.flat = self._raw_h5['/exchange/data_white'][:].mean(axis=0)
+        if not proj_file:
+            self.log_output.append("\u274c No file selected")
+            return
+        raw_fn = proj_file  # fixed: currentData() already carries the full path
+        try:
+            self._raw_h5 = h5py.File(raw_fn, "r")
+        except Exception as e:
+            self.log_output.append(f"\u274c Failed to open H5: {e}")
+            return
+        self.raw_files_num = self._raw_h5['/exchange/data'].shape[0] # number of projections
+        # safe mean to float to avoid uint overflows
+        self.dark = np.array(self._raw_h5['/exchange/data_dark'][:], dtype=np.float32).mean(axis=0)
+        self.flat = np.array(self._raw_h5['/exchange/data_white'][:], dtype=np.float32).mean(axis=0)
         self._keep_zoom = False
         self._clear_roi()
-        self._reset_view_state()        
-        self.set_image_scale(self._raw_h5['/exchange/data'][:][0,:,:], flag="raw")
+        self._reset_view_state()
+        first_img = np.array(self._raw_h5['/exchange/data'][0, :, :], dtype=np.float32)
+        self.set_image_scale(first_img, flag="raw")
         try:
             self.slice_slider.valueChanged.disconnect()
         except TypeError:
@@ -870,7 +1642,7 @@ class TomoGUI(QWidget):
         try_dir = os.path.join(f"{data_folder}_rec", "try_center", proj_name)
         self.preview_files = sorted(glob.glob(os.path.join(try_dir, "*.tiff")))
         if not self.preview_files:
-            self.log_output.append(f"❌No try folder")
+            self.log_output.append(f"\u274cNo try folder")
             return
         self._keep_zoom = False
         self._clear_roi()
@@ -892,7 +1664,7 @@ class TomoGUI(QWidget):
 
         self.full_files = sorted(glob.glob(os.path.join(full_dir, "*.tiff")))
         if not self.full_files:
-            self.log_output.append("⚠️ No full reconstruction images found.")
+            self.log_output.append("\u26a0\ufe0f No full reconstruction images found.")
             return
         self._keep_zoom = False
         self._clear_roi()
@@ -911,7 +1683,7 @@ class TomoGUI(QWidget):
             img = img_path
         else:
             img = np.array(Image.open(img_path))
-        self.vmin, self.vmax = round(img.min(), 5), round(img.max(), 5) 
+        self.vmin, self.vmax = round(float(np.nanmin(img)), 5), round(float(np.nanmax(img)), 5) 
         self.min_input.setText(str(self.vmin))
         self.max_input.setText(str(self.vmax))
 
@@ -920,7 +1692,7 @@ class TomoGUI(QWidget):
     def draw_box(self):
         """Enable interactive ROI drawing. Drag to create; click to finish."""
         if self._current_img is None:
-            self.log_output.append("⚠️ No image loaded to draw box.")
+            self.log_output.append("\u26a0\ufe0f No image loaded to draw box.")
             return
 
         if self.rect_selector is None:
@@ -993,7 +1765,7 @@ class TomoGUI(QWidget):
     def auto_img_contrast(self, saturation=10):
         """Fiji-like Auto: trims tails within current window; uses ROI if present; never edits pixels."""
         if self._current_img is None:
-            self.log_output.append("⚠️ No image loaded to auto contrast.")
+            self.log_output.append("\u26a0\ufe0f No image loaded to auto contrast.")
             return
 
         img = self._current_img
@@ -1006,7 +1778,7 @@ class TomoGUI(QWidget):
             y0 = max(0, min(h, int(np.floor(y0))))
             y1 = max(0, min(h, int(np.ceil(y1))))
             if x1 <= x0 or y1 <= y0:
-                self.log_output.append("⚠️ ROI too small.")
+                self.log_output.append("\u26a0\ufe0f ROI too small.")
                 return
             data = img[y0:y1, x0:x1]
         else:
@@ -1015,7 +1787,7 @@ class TomoGUI(QWidget):
         a = np.asarray(data, dtype=float).ravel()
         a = a[np.isfinite(a)]
         if a.size == 0:
-            self.log_output.append("⚠️ No finite pixels for Auto.")
+            self.log_output.append("\u26a0\ufe0f No finite pixels for Auto.")
             return
 
         vmin = self.vmin if self.vmin is not None else float(np.nanmin(a))
@@ -1060,20 +1832,20 @@ class TomoGUI(QWidget):
     def update_raw_slice(self):
         self._keep_zoom = True
         idx = self.slice_slider.value()
-        if 0 <= idx < self.raw_files_num:  
+        if 0 <= idx < self.raw_files_num:
             self.show_image(img_path=idx, flag="raw")
 
     def update_try_slice(self):
         self._keep_zoom = True
         idx = self.slice_slider.value()
         if 0 <= idx < len(self.preview_files):
-            self.show_image(img_path=self.preview_files[idx],flag=None)
+            self.show_image(self.preview_files[idx], flag=None)
 
     def update_full_slice(self):
         self._keep_zoom = True
         idx = self.slice_slider.value()
         if 0 <= idx < len(self.full_files):
-            self.show_image(img_path=self.full_files[idx],flag=None)
+            self.show_image(self.full_files[idx], flag=None)
 
     def _safe_open_image(self, path, flag=None, retries=3): 
         #add flag to seperate raw, recon
@@ -1137,6 +1909,8 @@ class TomoGUI(QWidget):
         self._last_xlim = self.ax.get_xlim()
         self._last_ylim = self.ax.get_ylim()
         self._last_image_shape = (h, w)
+
+
 
     def _remember_view(self):
         """Record current view so the next image keeps the same zoom/pan."""
@@ -1209,7 +1983,7 @@ class TomoGUI(QWidget):
     def help_tomolog(self):
         """Run the CLI `tomolog run -h` and show output in the GUI log."""
         name = "tomolog-help"
-        self.log_output.append(f"📖[{name}] tomolog run -h")
+        self.log_output.append(f"\U0001f4d6[{name}] tomolog run -h")
 
         p = QProcess(self)
         p.setProcessChannelMode(QProcess.SeparateChannels)
@@ -1230,12 +2004,12 @@ class TomoGUI(QWidget):
                 self.process[:] = [(pp, nn) for (pp, nn) in self.process if pp is not p]
             except Exception:
                 pass
-            self.log_output.append(f"✅[{name}] done." if code == 0
-                                else f"❌[{name}] failed with code {code}.")
+            self.log_output.append(f"\u2705[{name}] done." if code == 0
+                                else f"\u274c[{name}] failed with code {code}.")
 
         p.finished.connect(_done)
         p.errorOccurred.connect(
-            lambda _err: self.log_output.append(f"❌[{name}] {p.errorString()}")
+            lambda _err: self.log_output.append(f"\u274c[{name}] {p.errorString()}")
         )
 
         if not isinstance(self.process, list):
@@ -1257,7 +2031,7 @@ class TomoGUI(QWidget):
         vmax = self.max_input.text().strip()
         
         if not data_folder:
-            self.log_output.append("❌[ERROR] Data folder not set.")
+            self.log_output.append("\u274c[ERROR] Data folder not set.")
             return
         
         flist = []
@@ -1266,7 +2040,7 @@ class TomoGUI(QWidget):
             filename = os.path.join(data_folder, f"{fn}")
             flist.append(filename)
             if not filename:
-                self.log_output.append("❌[ERROR] Filename not exist.")
+                self.log_output.append("\u274c[ERROR] Filename not exist.")
                 return
         else:
             numbers = set()
@@ -1277,12 +2051,12 @@ class TomoGUI(QWidget):
                         start, end = map(int, sn.split("-"))
                         numbers.update(range(start, end+1))
                     except ValueError:
-                        self.log_output.append("❌[ERROR] Invalid range: {sn}")
+                        self.log_output.append("\u274c[ERROR] Invalid range: {sn}")
                 else:
                     try:
                         numbers.add(int(sn))
                     except ValueError:
-                        self.log_output.append("❌[ERROR] Invalid scan number: {sn}")
+                        self.log_output.append("\u274c[ERROR] Invalid scan number: {sn}")
             for n in numbers:
                 fn = os.path.join(data_folder, f"*{n:04d}.h5")
                 try:
@@ -1316,6 +2090,15 @@ class TomoGUI(QWidget):
             QApplication.processEvents()
             code = self.run_command_live(cmd, proj_file=input_fn, job_label="tomolog", wait=True)
             if code == 0:
-                self.log_output.append(f"✅ Done tomolog {input_fn}")
+                self.log_output.append(f"\u2705 Done tomolog {input_fn}")
             else:
-                self.log_output.append(f"❌ Tomolog {input_fn} failed.")
+                self.log_output.append(f"\u274c Tomolog {input_fn} failed.")
+
+
+if __name__ == "__main__":
+    import sys
+    app = QApplication(sys.argv)
+    w = TomoGUI()
+    w.show()
+    sys.exit(app.exec_())
+
