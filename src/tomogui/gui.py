@@ -18,6 +18,7 @@ from PyQt5.QtCore import Qt, QEvent, QProcess, QEventLoop
 from PIL import Image
 from matplotlib.widgets import RectangleSelector
 from matplotlib.backend_bases import MouseButton
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 import h5py
 
 # Load matplotlib style from package resources
@@ -246,6 +247,8 @@ class TomoGUI(QWidget):
         self.canvas = FigureCanvas(self.fig)
         self.ax = self.fig.add_subplot(111)
         self.cbar = None
+        self._cax = None
+        self.fig.set_constrained_layout(True)
         self._keep_zoom = False
         self._last_xlim = None
         self._last_ylim = None
@@ -269,12 +272,12 @@ class TomoGUI(QWidget):
         # Image control buttons
         draw_box_btn = QPushButton("Draw")
         draw_box_btn.clicked.connect(self.draw_box)
-        draw_box_btn.setFixedWidth(48)
+        draw_box_btn.setFixedWidth(42)
         auto_scale_btn = QPushButton("Auto")
-        auto_scale_btn.setFixedWidth(48)
+        auto_scale_btn.setFixedWidth(42)
         auto_scale_btn.clicked.connect(self.auto_img_contrast)
         reset_scale_btn = QPushButton("Reset")
-        reset_scale_btn.setFixedWidth(48)
+        reset_scale_btn.setFixedWidth(42)
         reset_scale_btn.clicked.connect(self.reset_img_contrast)
         toolbar_row.addWidget(draw_box_btn)
         toolbar_row.addWidget(auto_scale_btn)
@@ -283,13 +286,13 @@ class TomoGUI(QWidget):
         # Min/Max inputs
         toolbar_row.addWidget(QLabel("Min:"))
         self.min_input = QLineEdit()
-        self.min_input.setFixedWidth(60)
+        self.min_input.setFixedWidth(55)
         self.min_input.editingFinished.connect(self.update_vmin_vmax)
         toolbar_row.addWidget(self.min_input)
 
         toolbar_row.addWidget(QLabel("Max:"))
         self.max_input = QLineEdit()
-        self.max_input.setFixedWidth(60)
+        self.max_input.setFixedWidth(55)
         self.max_input.editingFinished.connect(self.update_vmin_vmax)
         toolbar_row.addWidget(self.max_input)
 
@@ -1821,7 +1824,7 @@ class TomoGUI(QWidget):
 
     def reset_img_contrast(self): #link to Reset button
         if self._current_img is not None:
-            if self._current_img_path is not str:
+            if not isinstance(self._current_img_path, str):
                 self._current_img = self._safe_open_prj(self._current_img_path)
             else:
                 self._current_img = self._safe_open_image(self._current_img_path)
@@ -1890,11 +1893,15 @@ class TomoGUI(QWidget):
             origin="upper",
             extent=[0, w, h, 0]
         )
-        self.ax.set_title(os.path.basename(str(img_path)), pad=7)
-        self.ax.set_aspect('equal')
+        self.ax.set_title(os.path.basename(str(img_path)), pad=5.5)
+        self.ax.set_box_aspect(h / w)
+        self.ax.margins(0)
+        self.ax.set_anchor('C')
+        if (self._cax is None) or (self._cax.figure is None):
+            divider = make_axes_locatable(self.ax)
+            self._cax = divider.append_axes("right", size="1.8%", pad=0.035) #set cax once
         if self.cbar == None:
-            self.cbar = self.fig.colorbar(im, ax=self.ax, location="right", fraction=0.01, pad=0.01, aspect=35) #add colorbar on the right of img
-        else:
+            self.cbar = self.fig.colorbar(im, ax=self.ax, cax=self._cax) 
             self.cbar.update_normal(im)
         if (self._keep_zoom and
             self._last_image_shape == (h, w) and
@@ -1907,7 +1914,6 @@ class TomoGUI(QWidget):
             self.ax.set_xlim(left, right)
             self.ax.set_ylim(bottom, top)
 
-        self.fig.tight_layout()
         self.canvas.draw_idle()
 
         self._last_xlim = self.ax.get_xlim()
