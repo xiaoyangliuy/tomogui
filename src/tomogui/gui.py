@@ -227,6 +227,7 @@ class TomoGUI(QWidget):
         self.fig = Figure(figsize=(5, 6.65))
         self.canvas = FigureCanvas(self.fig)
         self.ax = self.fig.add_subplot(111)
+        self.cbar = None
         self._keep_zoom = False
         self._last_xlim = None
         self._last_ylim = None
@@ -1108,7 +1109,10 @@ class TomoGUI(QWidget):
         )
         self.ax.set_title(os.path.basename(str(img_path)), pad=3)
         self.ax.set_aspect('equal')
-        self.fig.colorbar(im, ax=self.ax, location="right") #add colorbar on the right of img
+        if self.cbar == None:
+            self.cbar = self.fig.colorbar(im, ax=self.ax, location="right") #add colorbar on the right of img
+        else:
+            self.cbar.update_normal(im)
         if (self._keep_zoom and
             self._last_image_shape == (h, w) and
             self._last_xlim is not None and
