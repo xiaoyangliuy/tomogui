@@ -1904,11 +1904,13 @@ class TomoGUI(QWidget):
         self.ax.set_anchor('C')
         if (self._cax is None) or (self._cax.figure is None):
             divider = make_axes_locatable(self.ax)
-            self._cax = divider.append_axes("right", size="2.8%", pad=0.035) #set cax once
+            self._cax = divider.append_axes("right", size="1.8%", pad=0.035) #set cax once
             self._cax.set_in_layout(False)
         if self.cbar == None:
             self.cbar = self.fig.colorbar(im, ax=self.ax, cax=self._cax) 
             self.cbar.update_normal(im)
+        self.cbar.ax.tick_params(labelsize=6, length=3, width=0.8, colors="black")
+        self.cbar.update_ticks()
         if (self._keep_zoom and
             self._last_image_shape == (h, w) and
             self._last_xlim is not None and
