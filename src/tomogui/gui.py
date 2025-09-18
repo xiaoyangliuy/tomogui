@@ -260,11 +260,11 @@ class TomoGUI(QWidget):
         self.toolbar.setToolButtonStyle(Qt.ToolButtonIconOnly)
         self.toolbar.coordinates = False #disable default coords
         self.canvas.setMouseTracking(True)
-        self.toolbar.setFixedWidth(290)
+        self.toolbar.setFixedWidth(280)
         toolbar_row.addWidget(self.toolbar)
         self.coord_label = QLabel("")
-        self.coord_label.setFixedWidth(120)
-        self.coord_label.setStyleSheet("font-size: 10pt;")
+        self.coord_label.setFixedWidth(135)
+        self.coord_label.setStyleSheet("font-size: 11pt;")
         toolbar_row.addWidget(self.coord_label)
         try:
             self.toolbar._actions['home'].triggered.connect(self._on_toolbar_home)
@@ -1794,7 +1794,7 @@ class TomoGUI(QWidget):
         ix, iy = int(round(x)), int(round(y))
         if 0 <= ix < w and 0 <= iy < h:
             val = self._current_img[iy, ix]
-            msg = f"({ix},{iy}): {float(val):.4f}"
+            msg = f"({ix},{iy}): {float(val):.5f}"
         else:
             msg = ""
         if hasattr(self, "coord_label"):
