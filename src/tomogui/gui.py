@@ -258,11 +258,11 @@ class TomoGUI(QWidget):
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
         self.toolbar.coordinates = False #disable default coords
         self.canvas.setMouseTracking(True)
-        self.toolbar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.toolbar.setFixedWidth(300)
         toolbar_row.addWidget(self.toolbar)
         toolbar_row.addStretch(1)
         self.coord_label = QLabel("")
-        self.coord_label.setMinimumWidth(80)
+        self.coord_label.setFixedWidth(80)
         toolbar_row.insertWidget(1, self.coord_label)
         try:
             self.toolbar._actions['home'].triggered.connect(self._on_toolbar_home)
@@ -272,9 +272,9 @@ class TomoGUI(QWidget):
         self._cid_release = self.canvas.mpl_connect("button_release_event", self._nav_oneshot_release)
 
         # Colormap dropdown
-        toolbar_row.addWidget(QLabel("Colormap:"))
+        toolbar_row.addWidget(QLabel("Cmap:"))
         self.cmap_box = QComboBox()
-        self.cmap_box.setFixedWidth(45)
+        self.cmap_box.setFixedWidth(48)
         self.cmap_box.addItems(["gray", "viridis", "plasma", "inferno", "magma", "cividis"])
         self.cmap_box.setCurrentText(self.default_cmap)
         self.cmap_box.currentIndexChanged.connect(self.update_cmap)
@@ -1792,7 +1792,7 @@ class TomoGUI(QWidget):
         ix, iy = int(round(x)), int(round(y))
         if 0 <= ix < w and 0 <= iy < h:
             val = self._current_img[iy, ix]
-            msg = f"({ix}, {iy}) = {float(round(val, 3))}"
+            msg = f"({ix},{iy}): {float(val):.3f}"
         else:
             msg = ""
         if hasattr(self, "coord_label"):
