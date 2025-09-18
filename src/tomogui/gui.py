@@ -259,15 +259,16 @@ class TomoGUI(QWidget):
         self.toolbar.coordinates = False #disable default coords
         self.canvas.setMouseTracking(True)
         self.toolbar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        toolbar_row.addWidget(self.toolbar)
+        toolbar_row.addStretch(1)
+        self.coord_label = QLabel("")
+        self.coord_label.setMinimumWidth(80)
+        toolbar_row.insertWidget(1, self.coord_label)
         try:
             self.toolbar._actions['home'].triggered.connect(self._on_toolbar_home)
         except Exception:
             pass
-        toolbar_row.addWidget(self.toolbar)
-        self.coord_label = QLabel("")
-        self.coord_label.setMinimumWidth(80)
-        toolbar_row.insertWidget(1, self.coord_label)
-        toolbar_row.addStretch(1)
+        self._cid_motion = self.canvas.mpl_connect("motion_notify_event", self._on_mouse_move)
         self._cid_release = self.canvas.mpl_connect("button_release_event", self._nav_oneshot_release)
 
         # Colormap dropdown
