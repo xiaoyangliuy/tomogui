@@ -274,6 +274,7 @@ class TomoGUI(QWidget):
         # Colormap dropdown
         toolbar_row.addWidget(QLabel("Colormap:"))
         self.cmap_box = QComboBox()
+        self.cmap_box.setFixedWidth(45)
         self.cmap_box.addItems(["gray", "viridis", "plasma", "inferno", "magma", "cividis"])
         self.cmap_box.setCurrentText(self.default_cmap)
         self.cmap_box.currentIndexChanged.connect(self.update_cmap)
@@ -1791,7 +1792,7 @@ class TomoGUI(QWidget):
         ix, iy = int(round(x)), int(round(y))
         if 0 <= ix < w and 0 <= iy < h:
             val = self._current_img[iy, ix]
-            msg = f"({ix}, {iy}) = {round(val, 5)}"
+            msg = f"({ix}, {iy}) = {float(round(val, 3))}"
         else:
             msg = ""
         if hasattr(self, "coord_label"):
