@@ -269,7 +269,8 @@ class TomoGUI(QWidget):
         toolbar_row.addWidget(self.toolbar)
         self.coord_label = QLabel("")
         self.coord_label.setMinimumWidth(80)
-        toolbar_row.addWidget(self.coord_label)
+        toolbar_row.insertWidget(1, self.coord_label)
+        toolbar_row.addStretch(1)
         self._cid_release = self.canvas.mpl_connect("button_release_event", self._nav_oneshot_release)
 
         # Colormap dropdown
@@ -1158,7 +1159,7 @@ class TomoGUI(QWidget):
 
     def update_cmap(self): #link to cmap dropdown
         self.current_cmap = self.cmap_box.currentText()
-        self.cbar = None # reset colorbar, so next step will redraw it
+        self.cbar.remove() # reset colorbar, so next step will redraw it
         self.refresh_current_image()
 
     def update_vmin_vmax(self): #link to min/max input
@@ -2015,6 +2016,7 @@ class TomoGUI(QWidget):
         self._last_xlim = None
         self._last_ylim = None
         self._last_image_shape = None
+        self.cbar.remove()
         self.cbar = None
 
     def _on_toolbar_home(self):
