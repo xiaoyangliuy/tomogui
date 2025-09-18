@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
     QTabWidget, QFormLayout, QCheckBox, QSpinBox, QDoubleSpinBox,
     QScrollArea
 )
-from PyQt5.QtCore import Qt, QEvent, QProcess, QEventLoop
+from PyQt5.QtCore import Qt, QEvent, QProcess, QEventLoop, QSize
 
 from PIL import Image
 from matplotlib.widgets import RectangleSelector
