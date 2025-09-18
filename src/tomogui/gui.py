@@ -256,12 +256,14 @@ class TomoGUI(QWidget):
         self._drawing_roi = False
         self.canvas.mpl_connect("button_press_event", self._on_canvas_click)
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
+        self.toolbar.setIconSize(Qt.QSize(16,16))
+        self.toolbar.setToolButtonStyle(Qt.ToolButtonIconOnly)
         self.toolbar.coordinates = False #disable default coords
         self.canvas.setMouseTracking(True)
-        self.toolbar.setFixedWidth(280)
+        self.toolbar.setFixedWidth(290)
         toolbar_row.addWidget(self.toolbar)
         self.coord_label = QLabel("")
-        self.coord_label.setFixedWidth(95)
+        self.coord_label.setFixedWidth(100)
         toolbar_row.addWidget(self.coord_label)
         try:
             self.toolbar._actions['home'].triggered.connect(self._on_toolbar_home)
@@ -271,9 +273,9 @@ class TomoGUI(QWidget):
         self._cid_release = self.canvas.mpl_connect("button_release_event", self._nav_oneshot_release)
 
         # Colormap dropdown
-        toolbar_row.addWidget(QLabel("Cmap:"))
+        toolbar_row.addWidget(QLabel("Cmap"))
         self.cmap_box = QComboBox()
-        self.cmap_box.setFixedWidth(50)
+        self.cmap_box.setFixedWidth(51)
         self.cmap_box.addItems(["gray", "viridis", "plasma", "inferno", "magma", "cividis"])
         self.cmap_box.setCurrentText(self.default_cmap)
         self.cmap_box.currentIndexChanged.connect(self.update_cmap)
@@ -294,15 +296,15 @@ class TomoGUI(QWidget):
         toolbar_row.addWidget(reset_scale_btn)
 
         # Min/Max inputs
-        toolbar_row.addWidget(QLabel("Min:"))
+        toolbar_row.addWidget(QLabel("Min"))
         self.min_input = QLineEdit()
-        self.min_input.setFixedWidth(55)
+        self.min_input.setFixedWidth(50)
         self.min_input.editingFinished.connect(self.update_vmin_vmax)
         toolbar_row.addWidget(self.min_input)
 
-        toolbar_row.addWidget(QLabel("Max:"))
+        toolbar_row.addWidget(QLabel("Max"))
         self.max_input = QLineEdit()
-        self.max_input.setFixedWidth(55)
+        self.max_input.setFixedWidth(50)
         self.max_input.editingFinished.connect(self.update_vmin_vmax)
         toolbar_row.addWidget(self.max_input)
 
@@ -1837,7 +1839,7 @@ class TomoGUI(QWidget):
             if lo >= hi:
                 hi = lo + 1.0
 
-        new_vmin, new_vmax = float(round(lo, 5)), float(round(hi, 5))
+        new_vmin, new_vmax = float(round(lo, 3)), float(round(hi, 3))
         if (new_vmin, new_vmax) == (self.vmin, self.vmax):
             self.log_output.append("Auto B&C optimal.")
             return
