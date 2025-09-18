@@ -265,7 +265,7 @@ class TomoGUI(QWidget):
         toolbar_row.addWidget(self.toolbar)
         toolbar_row.addSpacing(1)
         self.coord_label = QLabel("")
-        self.coord_label.setFixedWidth(143)
+        self.coord_label.setFixedWidth(150)
         self.coord_label.setStyleSheet("font-size: 11pt;")
         toolbar_row.addWidget(self.coord_label)
         try:
