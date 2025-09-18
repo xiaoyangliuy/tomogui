@@ -250,7 +250,7 @@ class TomoGUI(QWidget):
         self.cbar = None
         self._cax = None
         self.fig.set_constrained_layout(True)
-        self.fig.set_layout_engine('constrained', h_pad=0.01, w_pad=0.01, wspace=0.0, hspace=0.0)
+        self.fig.set_layout_engine('constrained', h_pad=0.01, w_pad=0.01, wspace=0.3, hspace=0.0)
         self._keep_zoom = False
         self._last_xlim = None
         self._last_ylim = None
@@ -1904,15 +1904,13 @@ class TomoGUI(QWidget):
         )
         self.ax.set_title(os.path.basename(str(img_path)), pad=5.5)
         self.ax.set_box_aspect(h / w)
-        self.ax.margins(0)
+        self.ax.margins(0.01)
         self.ax.set_anchor('C')
-        if (self._cax is None) or (self._cax.figure is None):
-            divider = make_axes_locatable(self.ax)
-            self._cax = divider.append_axes("right", size="1.8%", pad=0.035) #set cax once
-            self._cax.set_in_layout(False)
         if self.cbar == None:
-            self.cbar = self.fig.colorbar(im, ax=self.ax, cax=self._cax) 
+            self.cbar = self.fig.colorbar(im, ax=self.ax, fraction=0.038, pad=0.02) 
+        else:
             self.cbar.update_normal(im)
+            self.cbar.update_ticks()
         if (self._keep_zoom and
             self._last_image_shape == (h, w) and
             self._last_xlim is not None and
@@ -2000,7 +1998,7 @@ class TomoGUI(QWidget):
         self._last_xlim = None
         self._last_ylim = None
         self._last_image_shape = None
-        
+
     # ===== TOMOLOG METHODS =====
 
     def get_note_value(self):
