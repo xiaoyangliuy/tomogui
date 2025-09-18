@@ -245,6 +245,7 @@ class TomoGUI(QWidget):
         toolbar_row = QHBoxLayout()
         self.fig = Figure(figsize=(5, 6.65))
         self.canvas = FigureCanvas(self.fig)
+        self.canvas.setMouseTracking(True)
         self.ax = self.fig.add_subplot(111)
         self.cbar = None
         self._cax = None
@@ -259,6 +260,7 @@ class TomoGUI(QWidget):
         self.canvas.mpl_connect("button_press_event", self._on_canvas_click)
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
         toolbar_row.addWidget(self.toolbar)
+        self.toolbar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         toolbar_row.addStretch(1)  # gives the toolbar breathing room
         self._cid_release = self.canvas.mpl_connect("button_release_event", self._nav_oneshot_release)
 
