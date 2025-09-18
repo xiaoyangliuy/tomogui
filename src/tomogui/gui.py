@@ -249,7 +249,7 @@ class TomoGUI(QWidget):
         self.ax = self.fig.add_subplot(111)
         self.cbar = None
         self._cax = None
-        self.fig.set_constrained_layout(True)
+        #self.fig.set_constrained_layout(True)
         self._keep_zoom = False
         self._last_xlim = None
         self._last_ylim = None
@@ -1904,7 +1904,7 @@ class TomoGUI(QWidget):
         self.ax.set_anchor('C')
         if (self._cax is None) or (self._cax.figure is None):
             divider = make_axes_locatable(self.ax)
-            self._cax = divider.append_axes("right", size="1.8%", pad=0.035) #set cax once
+            self._cax = divider.append_axes("right", size="2.8%", pad=0.035) #set cax once
         if self.cbar == None:
             self.cbar = self.fig.colorbar(im, ax=self.ax, cax=self._cax) 
             self.cbar.update_normal(im)
