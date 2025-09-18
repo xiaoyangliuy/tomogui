@@ -258,13 +258,14 @@ class TomoGUI(QWidget):
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
         self.toolbar.setIconSize(QSize(23,23))
         self.toolbar.setToolButtonStyle(Qt.ToolButtonIconOnly)
-        self.toolbar.setStyleSheet("QToolButton { padding: 0.5px; }")
+        self.toolbar.setStyleSheet("QToolButton { padding: 0.2px; }")
         self.toolbar.coordinates = False #disable default coords
         self.canvas.setMouseTracking(True)
         self.toolbar.setFixedWidth(280)
         toolbar_row.addWidget(self.toolbar)
+        toolbar_row.addSpacing(3)
         self.coord_label = QLabel("")
-        self.coord_label.setFixedWidth(135)
+        self.coord_label.setFixedWidth(138)
         self.coord_label.setStyleSheet("font-size: 11pt;")
         toolbar_row.addWidget(self.coord_label)
         try:
