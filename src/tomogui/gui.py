@@ -1903,11 +1903,11 @@ class TomoGUI(QWidget):
             extent=[0, w, h, 0]
         )
         self.ax.set_title(os.path.basename(str(img_path)), pad=5.5)
-        self.ax.set_box_aspect(h / w)
+        self.ax.set_aspect('equal', adjustable='box')  # square pixels; obey zoom limits without warnings
         self.ax.margins(0.01)
         self.ax.set_anchor('C')
         if self.cbar == None:
-            self.cbar = self.fig.colorbar(im, ax=self.ax, fraction=0.038, pad=0.02) 
+            self.cbar = self.fig.colorbar(im, ax=self.ax, fraction=0.018, pad=0.015, shrink=0.95, aspect=30) 
         else:
             self.cbar.update_normal(im)
             self.cbar.update_ticks()
