@@ -250,6 +250,7 @@ class TomoGUI(QWidget):
         self.cbar = None
         self._cax = None
         self.fig.set_constrained_layout(True)
+        self.fig.set_layout_engine('constrained', h_pad=0.01, w_pad=0.01, wspace=0.0, hspace=0.0)
         self._keep_zoom = False
         self._last_xlim = None
         self._last_ylim = None
@@ -259,8 +260,11 @@ class TomoGUI(QWidget):
         self._drawing_roi = False
         self.canvas.mpl_connect("button_press_event", self._on_canvas_click)
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
+        try:
+            self.toolbar._actions['home'].triggered.connect(self._on_toolbar_home)
+        except Exception:
+            pass
         toolbar_row.addWidget(self.toolbar)
-        self.toolbar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         toolbar_row.addStretch(1)  # gives the toolbar breathing room
         self._cid_release = self.canvas.mpl_connect("button_release_event", self._nav_oneshot_release)
 
@@ -1909,8 +1913,6 @@ class TomoGUI(QWidget):
         if self.cbar == None:
             self.cbar = self.fig.colorbar(im, ax=self.ax, cax=self._cax) 
             self.cbar.update_normal(im)
-        self.cbar.ax.tick_params(labelsize=6, length=3, width=0.8, colors="black")
-        self.cbar.update_ticks()
         if (self._keep_zoom and
             self._last_image_shape == (h, w) and
             self._last_xlim is not None and
@@ -1992,6 +1994,13 @@ class TomoGUI(QWidget):
         self._last_ylim = None
         self._last_image_shape = None
 
+    def _on_toolbar_home(self):
+        # forget any persisted zoom so the next slice uses full extents
+        self._keep_zoom = False
+        self._last_xlim = None
+        self._last_ylim = None
+        self._last_image_shape = None
+        
     # ===== TOMOLOG METHODS =====
 
     def get_note_value(self):
