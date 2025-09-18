@@ -260,7 +260,6 @@ class TomoGUI(QWidget):
         self.canvas.setMouseTracking(True)
         self.toolbar.setFixedWidth(250)
         toolbar_row.addWidget(self.toolbar)
-        toolbar_row.addStretch(0.5)
         self.coord_label = QLabel("")
         self.coord_label.setFixedWidth(90)
         toolbar_row.insertWidget(0.5, self.coord_label)
