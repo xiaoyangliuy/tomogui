@@ -258,11 +258,11 @@ class TomoGUI(QWidget):
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
         self.toolbar.coordinates = False #disable default coords
         self.canvas.setMouseTracking(True)
-        self.toolbar.setFixedWidth(250)
+        self.toolbar.setFixedWidth(280)
         toolbar_row.addWidget(self.toolbar)
         self.coord_label = QLabel("")
-        self.coord_label.setFixedWidth(90)
-        toolbar_row.insertWidget(1, self.coord_label)
+        self.coord_label.setFixedWidth(95)
+        toolbar_row.addWidget(self.coord_label)
         try:
             self.toolbar._actions['home'].triggered.connect(self._on_toolbar_home)
         except Exception:
