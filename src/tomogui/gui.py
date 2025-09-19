@@ -11,13 +11,14 @@ from PyQt5.QtWidgets import (
     QFileDialog, QTextEdit, QLineEdit, QLabel, QProgressBar,
     QComboBox, QSlider, QGroupBox, QSizePolicy, QMessageBox,
     QTabWidget, QFormLayout, QCheckBox, QSpinBox, QDoubleSpinBox,
-    QScrollArea
+    QScrollArea, QToolButton
 )
-from PyQt5.QtCore import Qt, QEvent, QProcess, QEventLoop
+from PyQt5.QtCore import Qt, QEvent, QProcess, QEventLoop, QSize
 
 from PIL import Image
 from matplotlib.widgets import RectangleSelector
 from matplotlib.backend_bases import MouseButton
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 import h5py
 
 # Load matplotlib style from package resources
@@ -245,7 +246,7 @@ class TomoGUI(QWidget):
         self.fig = Figure(figsize=(5, 6.65))
         self.canvas = FigureCanvas(self.fig)
         self.ax = self.fig.add_subplot(111)
-        self.cbar = None
+        self.fig.set_constrained_layout(True)
         self._keep_zoom = False
         self._last_xlim = None
         self._last_ylim = None
@@ -255,12 +256,29 @@ class TomoGUI(QWidget):
         self._drawing_roi = False
         self.canvas.mpl_connect("button_press_event", self._on_canvas_click)
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
+        self.toolbar.setIconSize(QSize(23,23))
+        self.toolbar.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        self.toolbar.setStyleSheet("QToolButton { padding: 0.15px; }")
+        self.toolbar.coordinates = False #disable default coords
+        self.canvas.setMouseTracking(True)
+        self.toolbar.setFixedWidth(270)
         toolbar_row.addWidget(self.toolbar)
+        toolbar_row.addSpacing(1)
+        self.coord_label = QLabel("")
+        self.coord_label.setFixedWidth(150)
+        self.coord_label.setStyleSheet("font-size: 11pt;")
+        toolbar_row.addWidget(self.coord_label)
+        try:
+            self.toolbar._actions['home'].triggered.connect(self._on_toolbar_home)
+        except Exception:
+            pass
+        self._cid_motion = self.canvas.mpl_connect("motion_notify_event", self._on_mouse_move)
         self._cid_release = self.canvas.mpl_connect("button_release_event", self._nav_oneshot_release)
 
         # Colormap dropdown
-        toolbar_row.addWidget(QLabel("Colormap:"))
+        toolbar_row.addWidget(QLabel("Cmap"))
         self.cmap_box = QComboBox()
+        self.cmap_box.setFixedWidth(51)
         self.cmap_box.addItems(["gray", "viridis", "plasma", "inferno", "magma", "cividis"])
         self.cmap_box.setCurrentText(self.default_cmap)
         self.cmap_box.currentIndexChanged.connect(self.update_cmap)
@@ -269,27 +287,27 @@ class TomoGUI(QWidget):
         # Image control buttons
         draw_box_btn = QPushButton("Draw")
         draw_box_btn.clicked.connect(self.draw_box)
-        draw_box_btn.setFixedWidth(48)
+        draw_box_btn.setFixedWidth(42)
         auto_scale_btn = QPushButton("Auto")
-        auto_scale_btn.setFixedWidth(48)
+        auto_scale_btn.setFixedWidth(42)
         auto_scale_btn.clicked.connect(self.auto_img_contrast)
         reset_scale_btn = QPushButton("Reset")
-        reset_scale_btn.setFixedWidth(48)
+        reset_scale_btn.setFixedWidth(42)
         reset_scale_btn.clicked.connect(self.reset_img_contrast)
         toolbar_row.addWidget(draw_box_btn)
         toolbar_row.addWidget(auto_scale_btn)
         toolbar_row.addWidget(reset_scale_btn)
 
         # Min/Max inputs
-        toolbar_row.addWidget(QLabel("Min:"))
+        toolbar_row.addWidget(QLabel("Min"))
         self.min_input = QLineEdit()
-        self.min_input.setFixedWidth(60)
+        self.min_input.setFixedWidth(50)
         self.min_input.editingFinished.connect(self.update_vmin_vmax)
         toolbar_row.addWidget(self.min_input)
 
-        toolbar_row.addWidget(QLabel("Max:"))
+        toolbar_row.addWidget(QLabel("Max"))
         self.max_input = QLineEdit()
-        self.max_input.setFixedWidth(60)
+        self.max_input.setFixedWidth(50)
         self.max_input.editingFinished.connect(self.update_vmin_vmax)
         toolbar_row.addWidget(self.max_input)
 
@@ -1142,7 +1160,7 @@ class TomoGUI(QWidget):
 
         p.start("tomocupy", [str(recon_way), "-h"])
 
-    def update_cmap(self):
+    def update_cmap(self): #link to cmap dropdown
         self.current_cmap = self.cmap_box.currentText()
         self.refresh_current_image()
 
@@ -1169,6 +1187,8 @@ class TomoGUI(QWidget):
             self.show_image(self.full_files[self.slice_slider.value()], flag=None)
         elif self.preview_files and 0 <= self.slice_slider.value() < len(self.preview_files):
             self.show_image(self.preview_files[self.slice_slider.value()], flag=None)
+        elif 0<= self.slice_slider.value() < self.raw_files_num:
+            self.show_image(img_path=self.slice_slider.value(), flag="raw")
 
     def highlight_editor(self, editor, event):
         editor.setStyleSheet("QTextEdit { border: 2px solid green; font-size: 12.5pt; }")
@@ -1625,7 +1645,7 @@ class TomoGUI(QWidget):
         self._keep_zoom = False
         self._clear_roi()
         self._reset_view_state()
-        first_img = np.array(self._raw_h5['/exchange/data'][0, :, :], dtype=np.float32)
+        first_img = self._raw_h5['/exchange/data'][0, :, :]
         self.set_image_scale(first_img, flag="raw")
         try:
             self.slice_slider.valueChanged.disconnect()
@@ -1683,12 +1703,11 @@ class TomoGUI(QWidget):
             img = img_path
         else:
             img = np.array(Image.open(img_path))
-        self.vmin, self.vmax = round(float(np.nanmin(img)), 3)*0.95, round(float(np.nanmax(img)), 3)*0.95 
+        self.vmin, self.vmax = round(float(np.nanmin(img)), 3), round(float(np.nanmax(img)), 3) 
         self.min_input.setText(str(self.vmin))
         self.max_input.setText(str(self.vmax))
 
     # ===== ROI AND CONTRAST =====
-
     def draw_box(self):
         """Enable interactive ROI drawing. Drag to create; click to finish."""
         if self._current_img is None:
@@ -1762,6 +1781,27 @@ class TomoGUI(QWidget):
         self.canvas.draw_idle()
         self.log_output.append("ROI cleared.")
 
+    def _on_mouse_move(self, event):
+        # show x,y and pixel value when mouse on image
+        if event.inaxes != self.ax or self._current_img is None:
+            if hasattr(self, "coord_label"):
+                self.coord_label.setText("")
+            return
+        x, y = event.xdata, event.ydata
+        if x is None or y is None:
+            if hasattr(self, "coord_label"):
+                self.coord_label.setText("")
+            return
+        h, w = self._current_img.shape[:2]
+        ix, iy = int(round(x)), int(round(y))
+        if 0 <= ix < w and 0 <= iy < h:
+            val = self._current_img[iy, ix]
+            msg = f"({ix},{iy}): {float(val):.5f}"
+        else:
+            msg = ""
+        if hasattr(self, "coord_label"):
+            self.coord_label.setText(msg)
+
     def auto_img_contrast(self, saturation=10):
         """Fiji-like Auto: trims tails within current window; uses ROI if present; never edits pixels."""
         if self._current_img is None:
@@ -1802,7 +1842,7 @@ class TomoGUI(QWidget):
             if lo >= hi:
                 hi = lo + 1.0
 
-        new_vmin, new_vmax = float(round(lo, 5)), float(round(hi, 5))
+        new_vmin, new_vmax = float(round(lo, 3)), float(round(hi, 3))
         if (new_vmin, new_vmax) == (self.vmin, self.vmax):
             self.log_output.append("Auto B&C optimal.")
             return
@@ -1821,8 +1861,11 @@ class TomoGUI(QWidget):
 
     def reset_img_contrast(self): #link to Reset button
         if self._current_img is not None:
-            self._current_img = self._safe_open_image(self._current_img_path)
-            self.vmin, self.vmax = round(self._current_img.min(), 5), round(self._current_img.max(), 5)
+            if not isinstance(self._current_img_path, str):
+                self._current_img = self._safe_open_prj(self._current_img_path)
+            else:
+                self._current_img = self._safe_open_image(self._current_img_path)
+            self.vmin, self.vmax = round(self._current_img.min(), 5)*0.95, round(self._current_img.max(), 5)*0.95
             self.min_input.setText(str(self.vmin))
             self.max_input.setText(str(self.vmax))
             self.refresh_current_image()
@@ -1856,6 +1899,14 @@ class TomoGUI(QWidget):
                 QApplication.processEvents()
         with Image.open(path) as im:
             return np.array(im)
+    
+    def _safe_open_prj(self,path,retries=3): #path is idx
+        for _ in range(retries):
+            try:
+                return self._raw_h5['/exchange/data'][path,:,:]
+            except Exception:
+                QApplication.processEvents()
+        return self._raw_h5['/exchange/data'][path,:,:]
 
     def show_image(self, img_path, flag=None):
         #Flag arg to seperate prj and recon 
@@ -1879,12 +1930,8 @@ class TomoGUI(QWidget):
             origin="upper",
             extent=[0, w, h, 0]
         )
-        self.ax.set_title(os.path.basename(str(img_path)), pad=5)
-        self.ax.set_aspect('equal')
-        if self.cbar == None:
-            self.cbar = self.fig.colorbar(im, ax=self.ax, location="right", fraction=0.03, pad=0.02) #add colorbar on the right of img
-        else:
-            self.cbar.update_normal(im)
+        self.ax.set_title(os.path.basename(str(img_path)), pad=5.5)
+        self.ax.set_aspect('equal', adjustable='box')  # square pixels; obey zoom limits without warnings
         if (self._keep_zoom and
             self._last_image_shape == (h, w) and
             self._last_xlim is not None and
@@ -1896,7 +1943,6 @@ class TomoGUI(QWidget):
             self.ax.set_xlim(left, right)
             self.ax.set_ylim(bottom, top)
 
-        self.fig.tight_layout()
         self.canvas.draw_idle()
 
         self._last_xlim = self.ax.get_xlim()
@@ -1962,6 +2008,14 @@ class TomoGUI(QWidget):
         except Exception:
             pass
 
+        self._keep_zoom = False
+        self._last_xlim = None
+        self._last_ylim = None
+        self._last_image_shape = None
+
+
+    def _on_toolbar_home(self):
+        # forget any persisted zoom so the next slice uses full extents
         self._keep_zoom = False
         self._last_xlim = None
         self._last_ylim = None
