@@ -1418,6 +1418,9 @@ class TomoGUI(QWidget):
             text = (self.active_editor or self.config_editor_try).toPlainText()
             with open(fn, "w") as f:
                 f.write(text)
+    
+    def generate_config(self):
+        pass #place holder for future use
 
     def abort_process(self):
         if not self.process:
