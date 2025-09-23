@@ -1275,7 +1275,7 @@ class TomoGUI(QWidget):
         conf_full_form = QFormLayout()
         #right - row 1: conf full txt box
         spacer = QWidget()
-        spacer.setFixedHeight(conf_try_box.sizeHint().height() - self.config_editor_try.sizeHint().height())
+        spacer.setFixedHeight(5)
         conf_full_form.addRow(spacer)   # this becomes "row 1" on the right
         #right - row 2: conf full txt box
         right_config_layout = QVBoxLayout()
