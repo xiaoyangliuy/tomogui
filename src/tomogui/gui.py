@@ -330,7 +330,7 @@ class TomoGUI(QWidget):
         self._build_Geometry_tab()
         self._build_Data_tab()        
         self._build_Performance_tab()
-        
+        self._build_advanced_config_tab()
         # Progress bar
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
