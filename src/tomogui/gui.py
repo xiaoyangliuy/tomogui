@@ -76,7 +76,7 @@ class TomoGUI(QWidget):
         left_layout.addLayout(proj_layout)
 
         # recon/recon_step + Rotation axis method + input guess COR + config buttons
-        cor_layout = QHBoxLayout()
+        #cor_layout = QHBoxLayout()
 
         '''
         #======================original method=========================
@@ -96,47 +96,46 @@ class TomoGUI(QWidget):
         self.cor_input = QLineEdit()
         cor_layout.addWidget(QLabel("COR:"))
         cor_layout.addWidget(self.cor_input)
-        '''
+        
         load_config_btn = QPushButton("Load Config")
         save_config_btn = QPushButton("Save Config")
         load_config_btn.clicked.connect(self.load_config)
         save_config_btn.clicked.connect(self.save_config)
         cor_layout.addWidget(load_config_btn)
         cor_layout.addWidget(save_config_btn)
+        '''
+        #view_prj_btn = QPushButton("View raw")
+        #view_prj_btn.clicked.connect(self.view_raw)
+        #cor_layout.addWidget(view_prj_btn)
 
-        view_prj_btn = QPushButton("View raw")
-        view_prj_btn.clicked.connect(self.view_raw)
-        cor_layout.addWidget(view_prj_btn)
+        #help_tomo_btn = QPushButton("help")
+        #help_tomo_btn.clicked.connect(self.help_tomo)
+        #cor_layout.addWidget(help_tomo_btn)
 
-        help_tomo_btn = QPushButton("help")
-        help_tomo_btn.clicked.connect(self.help_tomo)
-        cor_layout.addWidget(help_tomo_btn)
-
-        abort_btn = QPushButton("Abort")
-        abort_btn.clicked.connect(self.abort_process)
-        abort_btn.setStyleSheet("color: red;")
-        cor_layout.addWidget(abort_btn)
-        left_layout.addLayout(cor_layout)
+        #abort_btn = QPushButton("Abort")
+        #abort_btn.clicked.connect(self.abort_process)
+        #abort_btn.setStyleSheet("color: red;")
+        #cor_layout.addWidget(abort_btn)
+        #left_layout.addLayout(cor_layout)
 
         # ==== TABS (Configs + Params) ====
         self.tabs = QTabWidget()
         left_layout.addWidget(self.tabs)
 
         # Tab 1: Configs (contains two existing config editors)
-        configs_tab = QWidget()
+        first_tab = QWidget()
         #configs_v = QVBoxLayout(configs_tab)
         #self._config_frame_layout = QHBoxLayout()
         #configs_v.addLayout(self._config_frame_layout)
-        self.tabs.addTab(configs_tab, "Main")
+        self.tabs.addTab(first_tab, "Main")
 
         #==========main tab may===================
-        main_tab = QVBoxLayout(configs_tab)
+        main_tab = QVBoxLayout(first_tab)
         main_rows = QHBoxLayout()
         main_rows.setSpacing(5)
         #left frame for Try
         try_box = QGroupBox("Try Reconstruction")
         try_form = QFormLayout()
-        try_box.setLayout(try_form)
         #left - row 1
         self.recon_way_box = QComboBox()
         self.recon_way_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -174,13 +173,30 @@ class TomoGUI(QWidget):
         batch_try_btn.clicked.connect(self.batch_try_reconstruction)
         batch_try_layout.addWidget(batch_try_btn)
         try_form.addRow(batch_try_layout)
+        #left - row 6: prj, help, abort btn
+        others = QGroupBox("Others")
+        others_form = QFormLayout()
 
+        others_layout = QHBoxLayout()
+        view_prj_btn = QPushButton("View raw")
+        view_prj_btn.clicked.connect(self.view_raw)
+        help_tomo_btn = QPushButton("help")
+        help_tomo_btn.clicked.connect(self.help_tomo)
+        abort_btn = QPushButton("Abort")
+        abort_btn.clicked.connect(self.abort_process)
+        abort_btn.setStyleSheet("color: red;")
+        others_layout.addWidget(view_prj_btn)
+        others_layout.addWidget(help_tomo_btn)
+        others_layout.addWidget(abort_btn)
+        others_form.addRow(others_layout)
+        others.setLayout(others_form)
+        try_form.addRow(others)
+        
         try_box.setLayout(try_form)
 
         #right frame for Full
         full_box = QGroupBox("Full Reconstruction")
         full_form = QFormLayout()
-        full_box.setLayout(full_form)
         #right - row 1 recon/recon_step
         self.recon_way_box_full = QComboBox()
         self.recon_way_box_full.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -1221,7 +1237,63 @@ class TomoGUI(QWidget):
 
         return args        
 
+        # ===== advanced config tab====
+    def _build_advanced_config_tab(self):
+        config_tab = QWidget()
+        self.tabs.addTab(config_tab, "Advanced Config")
+        config_main = QVBoxLayout(config_tab)
+        config_rows = QHBoxLayout()
+        config_rows.setSpacing(5)
+        #left frame for Try
+        conf_try_box = QGroupBox("Try Recon Config")
+        conf_try_form = QFormLayout()
+        #left - row 1: generate config file button
+        ge_conf_btn = QPushButton("Generate config file")
+        ge_conf_btn.clicked.connect(self.generate_config) #place holder
+        conf_try_form.addRow(ge_conf_btn)
+        #left - row 2: load and save config file button
+        conf_layout = QHBoxLayout()
+        load_config_btn = QPushButton("Load Config")
+        save_config_btn = QPushButton("Save Config")
+        load_config_btn.clicked.connect(self.load_config)
+        save_config_btn.clicked.connect(self.save_config)
+        conf_layout.addWidget(load_config_btn)
+        conf_layout.addWidget(save_config_btn)
+        conf_try_form.addRow(conf_layout)
+        #left - row 3: conf txt box
+        left_config_layout = QVBoxLayout()
+        self.config_editor_try = QTextEdit()
+        self.config_editor_try.setFixedHeight(300)
+        self.config_editor_try.setStyleSheet("QTextEdit { border: 1px solid gray; font-size: 12.5pt; }")
+        self.config_editor_try.focusInEvent = lambda event: self.highlight_editor(self.config_editor_try, event)
+        self.config_editor_try.focusOutEvent = lambda event: self.unhighlight_editor(self.config_editor_try, event)
+        left_config_layout.addWidget(self.config_editor_try)
+        conf_try_form.addRow(left_config_layout)
+        conf_try_box.setLayout(conf_try_form)
 
+        conf_full_box = QGroupBox("Full Recon Config")
+        conf_full_form = QFormLayout()
+        #right - row 1: conf full txt box
+        spacer = QWidget()
+        spacer.setFixedHeight(conf_try_box.sizeHint().height() - self.config_editor_try.sizeHint().height())
+        conf_full_form.addRow(spacer)   # this becomes "row 1" on the right
+        #right - row 2: conf full txt box
+        right_config_layout = QVBoxLayout()
+        self.config_editor_full = QTextEdit()
+        self.config_editor_full.setFixedHeight(300)
+        self.config_editor_full.setStyleSheet("QTextEdit { border: 1px solid gray; font-size: 12.5pt; }")
+        self.config_editor_full.focusInEvent = lambda event: self.highlight_editor(self.config_editor_full, event)
+        self.config_editor_full.focusOutEvent = lambda event: self.unhighlight_editor(self.config_editor_full, event)
+        right_config_layout.addWidget(self.config_editor_full)
+        conf_full_form.addRow(right_config_layout)
+        conf_full_box.setLayout(conf_full_form)
+
+        self.active_editor = self.config_editor_try
+        config_rows.addWidget(conf_try_box,1)
+        config_rows.addWidget(conf_full_box,1)
+        config_main.addLayout(config_rows)
+
+    
     # ===== HELPER METHODS =====
     
     def help_tomo(self):
