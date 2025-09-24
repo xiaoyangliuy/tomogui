@@ -1557,12 +1557,13 @@ class TomoGUI(QWidget):
             else:
                 self.log_output.append(f"\u274c Try recon {proj_file} failed.")
         finally:
-            try:
-                if os.path.exists(temp_try):
-                    os.remove(temp_try)
-                    self.log_output.append(f"\U0001f9f9 Removed {temp_try}")
-            except Exception as e:
-                self.log_output.append(f"\u26a0\ufe0f Could not remove {temp_try}: {e}")
+            if self.use_conf_box.isChecked():
+                try:
+                    if os.path.exists(temp_try):
+                        os.remove(temp_try)
+                        self.log_output.append(f"\U0001f9f9 Removed {temp_try}")
+                except Exception as e:
+                    self.log_output.append(f"\u26a0\ufe0f Could not remove {temp_try}: {e}")
 
     def full_reconstruction(self):
         proj_file = self.proj_file_box.currentData()
@@ -1610,12 +1611,13 @@ class TomoGUI(QWidget):
             else:
                 self.log_output.append(f"\u274c Full recon {proj_file} failed.")
         finally:
-            try:
-                if os.path.exists(temp_full):
-                    os.remove(temp_full)
-                    self.log_output.append(f"\U0001f9f9 Removed {temp_full}")
-            except Exception as e:
-                self.log_output.append(f"\u26a0\ufe0f Could not remove {temp_full}: {e}")
+            if self.use_conf_box.isChecked():
+                try:
+                    if os.path.exists(temp_full):
+                        os.remove(temp_full)
+                        self.log_output.append(f"\U0001f9f9 Removed {temp_full}")
+                except Exception as e:
+                    self.log_output.append(f"\u26a0\ufe0f Could not remove {temp_full}: {e}")
         self.view_btn.setEnabled(True)
 
     def batch_try_reconstruction(self):
@@ -1694,12 +1696,13 @@ class TomoGUI(QWidget):
                     self.log_output.append(f"\u274c Try recon {proj_file} failed.")
                     summary['fail'].append(scan_str)
         finally:
-            try:
-                if os.path.exists(temp_try):
-                    os.remove(temp_try)
-                    self.log_output.append(f"\U0001f9f9 Removed {temp_try}")
-            except Exception as e:
-                self.log_output.append(f"\u26a0\ufe0f Could not remove {temp_try}: {e}")
+            if self.use_conf_box.isChecked():
+                try:
+                    if os.path.exists(temp_try):
+                        os.remove(temp_try)
+                        self.log_output.append(f"\U0001f9f9 Removed {temp_try}")
+                except Exception as e:
+                    self.log_output.append(f"\u26a0\ufe0f Could not remove {temp_try}: {e}")
             self.log_output.append(f"\u2705Done batch try, check summary: {str(summary)}")
 
     def batch_full_reconstruction(self):
@@ -1749,12 +1752,13 @@ class TomoGUI(QWidget):
                     self.log_output.append(f"\u274c full recon {proj_file} failed")
                     summary['fail'].append(f"{os.path.basename(proj_file)}")                
         finally:
-            try:
-                if os.path.exists(temp_full):
-                    os.remove(temp_full)
-                    self.log_output.append(f"\U0001f9f9 Removed {temp_full}")
-            except Exception as e:
-                self.log_output.append(f"\u26a0\ufe0f Could not remove {temp_full}: {e}")
+            if self.use_conf_box.isChecked():
+                try:
+                    if os.path.exists(temp_full):
+                        os.remove(temp_full)
+                        self.log_output.append(f"\U0001f9f9 Removed {temp_full}")
+                except Exception as e:
+                    self.log_output.append(f"\u26a0\ufe0f Could not remove {temp_full}: {e}")
             self.log_output.append(f"\u2705Done batch full, check summary: {str(summary)}")
 
     # ===== COR MANAGEMENT =====
