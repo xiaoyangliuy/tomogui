@@ -1242,7 +1242,7 @@ class TomoGUI(QWidget):
         config_tab = QWidget()
         self.tabs.addTab(config_tab, "Advanced Config")
         config_main = QVBoxLayout(config_tab) #main layout for the tab
-        config_txt_main = QVBoxLayout() #layout for left/right
+        config_txt_main = QHBoxLayout() #layout for left/right
         config_rows = QHBoxLayout()
         config_rows.setSpacing(5)
         # some common functions for both try/full
