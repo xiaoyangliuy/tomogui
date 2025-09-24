@@ -1916,7 +1916,7 @@ class TomoGUI(QWidget):
             img = img_path
         else:
             img = np.array(Image.open(img_path))
-        self.vmin, self.vmax = round(float(np.nanmin(img)), 3), round(float(np.nanmax(img)), 3) 
+        self.vmin, self.vmax = round(np.nanmin(img), 5), round(np.nanmax(img), 5)
         self.min_input.setText(str(self.vmin))
         self.max_input.setText(str(self.vmax))
 
