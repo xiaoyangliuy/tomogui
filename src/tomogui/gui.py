@@ -821,6 +821,8 @@ class TomoGUI(QWidget):
             w.setSingleStep(step)
             if default is not None:
                 w.setValue(default)
+            else:
+                w.setValue("None")
             if tip:
                 w.setToolTip(tip)
             self.phase_widgets[flag] = ("dspin", w)
@@ -853,7 +855,7 @@ class TomoGUI(QWidget):
             elif kind == "spin":
                 args += [flag, str(w.value())]
             elif kind == "dspin":
-                if w.value() is not None:
+                if bool(w.value()) is not "None":
                     args += [flag, str(w.value())]
                 else:
                     pass
