@@ -831,10 +831,10 @@ class TomoGUI(QWidget):
         add_dspin("--pixel-size", 0.0, 1e9, step=0.01, default=0.0)        
         add_dspin("--energy", 0.0, 1e6, step=0.1, default=0.0)
         add_dspin("--propagation-distance", 0.0, 1e6, step=0.1, default=0.0)        
-        add_dspin("--retrieve-phase-W", 0.0, 1.0, step=0.0001)#, default=0.0002)
-        add_dspin("--retrieve-phase-alpha", 0.0, 1e6, step=0.0001)#, default=0.0)
-        add_dspin("--retrieve-phase-delta-beta", 0.0, 1e9, step=0.1)#, default=1500.0)
-        add_spin("--retrieve-phase-pad", 0, 1024, step=1)#, default=1)
+        add_dspin("--retrieve-phase-W", 0.0, 1.0, step=0.0001,default=None)#, default=0.0002)
+        add_dspin("--retrieve-phase-alpha", 0.0, 1e6, step=0.0001,default=None)#, default=0.0)
+        add_dspin("--retrieve-phase-delta-beta", 0.0, 1e9, step=0.1,default=None)#, default=1500.0)
+        add_spin("--retrieve-phase-pad", 0, 1024, step=1,default=None)#, default=1)
   
         self.tabs.addTab(phase_tab, "Phase")
 
