@@ -784,7 +784,7 @@ class TomoGUI(QWidget):
         for flag, (kind, w, include_cb, _default) in self.bhard_widgets.items():
             if not include_cb.isChecked():
                 continue #skip grayed lines
-            
+
             if kind == "line":
                 val = w.text().strip()
                 if val != "":
@@ -995,7 +995,6 @@ class TomoGUI(QWidget):
             elif kind == "spin":
                 args += [flag, str(w.value())]
             elif kind == "dspin":
-                if 
                 args += [flag, str(w.value())]
 
         return args
