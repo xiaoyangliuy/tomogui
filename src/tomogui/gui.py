@@ -196,7 +196,7 @@ class TomoGUI(QWidget):
         abs_btn.setEnabled(False) #disable for now
         abs_btn.clicked.connect(self.preset_absorption)
         phase_btn = QPushButton("Phase") # preset for phase recon
-        phase_btn.setEnabled(False) #disable for now
+        phase_btn.setEnabled(True) 
         phase_btn.clicked.connect(self.preset_phase)
         lami_btn = QPushButton("Laminography") # preset for Laminography recon
         lami_btn.setEnabled(False) #disable for now
@@ -1773,10 +1773,21 @@ class TomoGUI(QWidget):
     def preset_absorption(self):
         pass #place holder for future use
     def preset_phase(self):
+        enable_flags = {"--retrieve-phase-method", 
+                        "--pixel-size", 
+                        "--propagation-distance", 
+                        "--energy", 
+                        "--retrieve-phase-alpha"}
+        for flag in enable_flags:
+            if flag in self.phase_widgets:
+                kind, w, include_cb, _default = self.phase_widgets[flag]
+                if include_cb is not None and not include_cb.isChecked():
+                    include_cb.setChecked(True)
+
         pass #place holder for future use
     def preset_laminography(self):
         pass #place holder for future use
-    
+
     def abort_process(self):
         if not self.process:
             self.log_output.append('<span style="color:red;">\u2139\ufe0f No running process.</span>')
