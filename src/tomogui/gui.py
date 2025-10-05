@@ -541,35 +541,81 @@ class TomoGUI(QWidget):
         outer.addWidget(scroll)
 
         self.param_widgets = {}
+        #add check box
+        def _add_row(flag, kind, w, default=None, label_text=None, include=True):
+            #include: show the checkbox, not--> always include in params
+            label_text = label_text or flag
 
-        def add_line(flag, placeholder="", tip="", width=240):
+            # label cell = [ include_cb | "flag" ]
+            label_widget = QWidget()
+            h = QHBoxLayout(label_widget)
+            h.setContentsMargins(0, 0, 0, 0)
+            h.setSpacing(6)
+            lbl = QLabel(label_text)
+
+            include_cb = None
+
+            if include:
+                include_cb = QCheckBox()
+                include_cb.setChecked(False) #default not enable
+                h.addWidget(include_cb)
+                lbl.setEnabled(False) #defalut not check
+                w.setEnabled(False)
+
+                def on_toggle(checked):
+                    lbl.setEnabled(checked)
+                    w.setEnabled(checked)
+                    if not checked:
+                        # reset to a sensible "off" state
+                        if kind in ("spin", "dspin") and default is not None:
+                            w.blockSignals(True)
+                            w.setValue(default)
+                            w.blockSignals(False)
+                        elif kind == "combo":
+                            if default is not None:
+                                w.setCurrentText(str(default))
+                            else:
+                                w.setCurrentIndex(0)
+                        elif kind == "line":
+                            w.clear()
+                        elif kind == "check":
+                            w.setChecked(False)
+
+                include_cb.toggled.connect(on_toggle)
+            else:
+                lbl.setEnabled(True)
+                w.setEnabled(True)
+            h.addWidget(lbl)
+            h.addStretch(1)
+            form.addRow(label_widget, w)
+
+            self.bhard_widgets[flag] = (kind, w, include_cb, default)
+
+        def add_line(flag, placeholder="", tip="", width=240, include=True):
             w = QLineEdit()
             if placeholder:
                 w.setPlaceholderText(placeholder)
             if tip:
                 w.setToolTip(tip)
             w.setFixedWidth(width)
-            self.param_widgets[flag] = ("line", w)
-            form.addRow(QLabel(flag), w)
+            _add_row(flag, "line", w, default="",include=include)
 
-        def add_combo(flag, items, default=None, tip=""):
+        def add_combo(flag, items, default=None, tip="", include=True):
             w = QComboBox()
             w.addItems(items)
             if default in items:
                 w.setCurrentText(default)
             if tip:
                 w.setToolTip(tip)
-            self.param_widgets[flag] = ("combo", w)
-            form.addRow(QLabel(flag), w)
+            _add_row(flag, "combo", w, default=default, include=include)
 
-        def add_check(flag, tip=""):
+        def add_check(flag, tip="", include=True):
             w = QCheckBox()
             if tip:
                 w.setToolTip(tip)
-            self.param_widgets[flag] = ("check", w)
-            form.addRow(QLabel(flag), w)
+            _add_row(flag, "check", w, default=False, include=include)
 
-        def add_spin(flag, minv, maxv, step=1, default=None, tip=""):
+        def add_spin(flag, minv, maxv, step=1, default=None, tip="", include=True):
             w = QSpinBox()
             w.setRange(minv, maxv)
             w.setSingleStep(step)
@@ -577,10 +623,9 @@ class TomoGUI(QWidget):
                 w.setValue(default)
             if tip:
                 w.setToolTip(tip)
-            self.param_widgets[flag] = ("spin", w)
-            form.addRow(QLabel(flag), w)
+            _add_row(flag, "spin", w, default=default, include=include)
 
-        def add_dspin(flag, minv, maxv, step=0.1, default=None, tip=""):
+        def add_dspin(flag, minv, maxv, step=0.1, default=None, tip="", include=True):
             w = QDoubleSpinBox()
             w.setDecimals(6)
             w.setRange(minv, maxv)
@@ -589,46 +634,47 @@ class TomoGUI(QWidget):
                 w.setValue(default)
             if tip:
                 w.setToolTip(tip)
-            self.param_widgets[flag] = ("dspin", w)
-            form.addRow(QLabel(flag), w)
+            _add_row(flag, "dspin", w, default=default, include=include)
 
-        add_combo("--binning", ["0","1","2","3"], default="0")
-
-
-        add_combo("--file-type", ["standard","double_fov"], default="standard")
+        add_combo("--binning", ["0","1","2","3"], default="0", include=False) #always include
 
 
-        add_dspin("--bright-ratio", 0.0, 1e9, step=0.1, default=1.0)
-        add_dspin("--center-search-step", 0.0, 1e6, step=0.05, default=0.5)
-        add_dspin("--center-search-width", 0.0, 1e6, step=0.5, default=50.0)
-        add_spin("--dezinger", 0, 10000, step=1, default=0)
-        add_spin("--dezinger-threshold", 0, 1000000, step=100, default=5000)
+        add_combo("--file-type", ["standard","double_fov"], default="standard", include=False) #always include
 
-        add_combo("--fbp-filter", ["none","ramp","shepp","hann","hamming","parzen","cosine","cosine2"], default="parzen")
-        add_spin("--find-center-end-row", -1, 10_000_000, step=1, default=-1)
-        add_spin("--find-center-start-row", 0, 10_000_000, step=1, default=0)
-        add_combo("--flat-linear", ["False","True"], default="False")
 
-        add_combo("--minus-log", ["True","False"], default="True")
+        add_dspin("--bright-ratio", 0.0, 1e9, step=0.1, default=1.0, include=False) #always include
+        add_dspin("--center-search-step", 0.0, 1e6, step=0.05, default=0.5, include=False) #always include
+        add_dspin("--center-search-width", 0.0, 1e6, step=0.5, default=50.0, include=False) #always include
+        add_spin("--dezinger", 0, 10000, step=1, default=5, include=False) #always include
+        add_spin("--dezinger-threshold", 0, 1000000, step=100, default=5000) 
 
-        add_line("--nsino", "0.5 or [0,0.9]")
+        add_combo("--fbp-filter", ["none","ramp","shepp","hann","hamming","parzen","cosine","cosine2"], default="parzen", include=False) #always include
+        add_spin("--find-center-end-row", -1, 10_000_000, step=1, default=-1, include=False) #always include
+        add_spin("--find-center-start-row", 0, 10_000_000, step=1, default=0, include=False) #always include
+        add_combo("--flat-linear", ["False","True"], default="False", include=False) #always include
+
+        add_combo("--minus-log", ["True","False"], default="True", include=False) #always include
+
+        add_line("--nsino", "0.5 or [0,0.9]", default=0.5, include=False) #always include
 
 #        add_dspin("--rotation-axis", -1e9, 1e9, step=0.01, default=-1.0)
 #        add_combo("--rotation-axis-auto", ["manual","auto"], default="manual")
-        add_combo("--rotation-axis-method", ["sift","vo"], default="sift")
+        add_combo("--rotation-axis-method", ["sift","vo"], default="sift", include=False) #always include
         add_line("--rotation-axis-pairs", "[0,1499] or [0,1499,749,2249]")
         add_dspin("--rotation-axis-sift-threshold", 0.0, 1.0, step=0.01, default=0.5)
 
 
         # Misc / algorithm
-        add_combo("--pre-processing", ["True","False"], default="True")
-        add_combo("--reconstruction-algorithm", ["fourierrec","linerec"], default="fourierrec")
+        add_combo("--pre-processing", ["True","False"], default="True", include=False) #always include
+        add_combo("--reconstruction-algorithm", ["fourierrec","linerec"], default="fourierrec", include=False) #always include
 
         self.tabs.addTab(params_tab, "Reconstruction")
 
     def _gather_params_args(self):
         args = []
-        for flag, (kind, w) in self.param_widgets.items():
+        for flag, (kind, w, include_cb, _default) in self.param_widgets.items():
+            if include_cb is not None and not include_cb.isChecked():
+                continue
             if kind == "line":
                 val = w.text().strip()
                 if val != "":
@@ -659,74 +705,80 @@ class TomoGUI(QWidget):
 
         self.bhard_widgets = {}
         #add check box before each line
-        def _add_row(flag, kind, w, default=None, label_text=None):
+        def _add_row(flag, kind, w, default=None, label_text=None, include=True):
+            #include: show the checkbox, not--> always include in params
             label_text = label_text or flag
-            include_cb = QCheckBox()
-            include_cb.setChecked(False)
 
             # label cell = [ include_cb | "flag" ]
             label_widget = QWidget()
             h = QHBoxLayout(label_widget)
             h.setContentsMargins(0, 0, 0, 0)
             h.setSpacing(6)
-            h.addWidget(include_cb)
             lbl = QLabel(label_text)
+
+            include_cb = None
+
+            if include:
+                include_cb = QCheckBox()
+                include_cb.setChecked(False) #default not enable
+                h.addWidget(include_cb)
+                lbl.setEnabled(False) #defalut not check
+                w.setEnabled(False)
+
+                def on_toggle(checked):
+                    lbl.setEnabled(checked)
+                    w.setEnabled(checked)
+                    if not checked:
+                        # reset to a sensible "off" state
+                        if kind in ("spin", "dspin") and default is not None:
+                            w.blockSignals(True)
+                            w.setValue(default)
+                            w.blockSignals(False)
+                        elif kind == "combo":
+                            if default is not None:
+                                w.setCurrentText(str(default))
+                            else:
+                                w.setCurrentIndex(0)
+                        elif kind == "line":
+                            w.clear()
+                        elif kind == "check":
+                            w.setChecked(False)
+
+                include_cb.toggled.connect(on_toggle)
+            else:
+                lbl.setEnabled(True)
+                w.setEnabled(True)
             h.addWidget(lbl)
             h.addStretch(1)
-
-            # start disabled/grey
-            lbl.setEnabled(False)
-            w.setEnabled(False)
-
-            def on_toggle(checked):
-                lbl.setEnabled(checked)
-                w.setEnabled(checked)
-                if not checked:
-                    # reset to a sensible "off" state
-                    if kind in ("spin", "dspin") and default is not None:
-                        w.blockSignals(True)
-                        w.setValue(default)
-                        w.blockSignals(False)
-                    elif kind == "combo":
-                        if default is not None:
-                            w.setCurrentText(str(default))
-                        else:
-                            w.setCurrentIndex(0)
-                    elif kind == "line":
-                        w.clear()
-                    elif kind == "check":
-                        w.setChecked(False)
-
-            include_cb.toggled.connect(on_toggle)
             form.addRow(label_widget, w)
 
             self.bhard_widgets[flag] = (kind, w, include_cb, default)         
 
-        def add_line(flag, placeholder="", tip="", width=240):
+        def add_line(flag, placeholder="", tip="", width=240, include=True):
             w = QLineEdit()
             if placeholder:
                 w.setPlaceholderText(placeholder)
             if tip:
                 w.setToolTip(tip)
             w.setFixedWidth(width)
-            _add_row(flag, "line", w, default="")
+            _add_row(flag, "line", w, default="",include=include)
 
-        def add_combo(flag, items, default=None, tip=""):
+        def add_combo(flag, items, default=None, tip="",include=True):
             w = QComboBox()
             w.addItems(items)
             if default in items:
                 w.setCurrentText(default)
             if tip:
                 w.setToolTip(tip)
-            _add_row(flag, "combo", w, default=default)
+            _add_row(flag, "combo", w, default=default, include=include)
 
-        def add_check(flag, tip=""):
+        def add_check(flag, tip="", include=True):
             w = QCheckBox()
             if tip:
                 w.setToolTip(tip)
-            _add_row(flag, "check", w, default=False)
+            _add_row(flag, "check", w, default=False, include=include)
 
-        def add_spin(flag, minv, maxv, step=1, default=None, tip=""):
+        def add_spin(flag, minv, maxv, step=1, default=None, tip="", include=True):
             w = QSpinBox()
             w.setRange(minv, maxv)
             w.setSingleStep(step)
@@ -734,9 +786,9 @@ class TomoGUI(QWidget):
                 w.setValue(default)
             if tip:
                 w.setToolTip(tip)
-            _add_row(flag, "spin", w, default=default)
+            _add_row(flag, "spin", w, default=default, include=include)
 
-        def add_dspin(flag, minv, maxv, step=0.1, default=None, tip=""):
+        def add_dspin(flag, minv, maxv, step=0.1, default=None, tip="", include=True):
             w = QDoubleSpinBox()
             w.setDecimals(6)
             w.setRange(minv, maxv)
@@ -745,7 +797,7 @@ class TomoGUI(QWidget):
                 w.setValue(default)
             if tip:
                 w.setToolTip(tip)
-            _add_row(flag, "dspin", w, default=default)
+            _add_row(flag, "dspin", w, default=default, include=include)
 
         # Beam hardening / source & scintillator
         add_combo("--beam-hardening-method", ["none","standard"], default="none")
@@ -782,7 +834,7 @@ class TomoGUI(QWidget):
     def _gather_bhard_args(self):
         args = []
         for flag, (kind, w, include_cb, _default) in self.bhard_widgets.items():
-            if not include_cb.isChecked():
+            if include_cb is not None and not include_cb.isChecked():
                 continue #skip grayed lines
 
             if kind == "line":
@@ -893,7 +945,7 @@ class TomoGUI(QWidget):
             elif kind == "spin":
                 args += [flag, str(w.value())]
             elif kind == "dspin":
-                if bool(w.value()) is not "None":
+                if bool(w.value()) != "None":
                     args += [flag, str(w.value())]
                 else:
                     pass
