@@ -1869,7 +1869,7 @@ class TomoGUI(QWidget):
                         "--scintillator-material", "--scintillator-thickness", 
                         "--source-distance", "--step-E"]
         for flag in enable_flags:
-            if flag in enable_flags:
+            if flag in self.bhard_widgets:
                 kind, w, include_cb, _default = self.data_widgets[flag]
                 if include_cb is not None and not include_cb.isChecked():
                     include_cb.setChecked(True)
