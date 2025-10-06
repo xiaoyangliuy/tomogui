@@ -1791,12 +1791,12 @@ class TomoGUI(QWidget):
                     params[flag] = str(w.value())
                 elif kind == "dspin":
                     params[flag] = str(w.value())
-            if params:
-                try:
-                    with open(fn, "a") as f:
-                        json.dump(params, f, indent=2)
-                except Exception as e:
-                    self.log_output.append(f'\u274c Failed to save params to {fn}: {e}')
+        if params:
+            try:
+                with open(fn, "a") as f:
+                    json.dump(params, f, indent=2)
+            except Exception as e:
+                self.log_output.append(f'\u274c Failed to save params to {fn}: {e}')
         self.log_output.append(f'\u2705 Saved enabled params to {fn}')
 
     def load_params_from_file(self):
