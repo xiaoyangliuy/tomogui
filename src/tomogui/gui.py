@@ -19,7 +19,8 @@ from PIL import Image
 from matplotlib.widgets import RectangleSelector
 from matplotlib.backend_bases import MouseButton
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-import h5py
+import h5py, json
+from datatime import datetime
 
 # Load matplotlib style from package resources
 matplotlib.rcdefaults()
@@ -192,24 +193,32 @@ class TomoGUI(QWidget):
         others_form.addRow(others_layout_1)
         #left - row 7: preset parameters for recon
         others_layout_2 = QHBoxLayout()
-        abs_btn = QPushButton("Absorption") # preset for absorption recon
-        abs_btn.setEnabled(False) #disable for now
-        abs_btn.clicked.connect(self.preset_absorption)
+        bhd_btn = QPushButton("BeamHarden") # preset for absorption recon
+        bhd_btn.setEnabled(False) #disable for now
+        bhd_btn.clicked.connect(self.preset_beamhardening)
         phase_btn = QPushButton("Phase") # preset for phase recon
-        phase_btn.setEnabled(True) 
+        phase_btn.setEnabled(True) #enable
         phase_btn.clicked.connect(self.preset_phase)
         lami_btn = QPushButton("Laminography") # preset for Laminography recon
-        lami_btn.setEnabled(False) #disable for now
+        lami_btn.setEnabled(True) #enable
         lami_btn.clicked.connect(self.preset_laminography)
-        others_layout_2.addWidget(abs_btn)
+        others_layout_2.addWidget(bhd_btn)
         others_layout_2.addWidget(phase_btn)
         others_layout_2.addWidget(lami_btn)
         others_form.addRow(others_layout_2)
         #left - row 8: more functions
         others_layout_3 = QHBoxLayout()
+        save_param_btn = QPushButton("Save params")
+        save_param_btn.setEnabled(True) #enable
+        save_param_btn.clicked.connect(self.save_params_to_file)
+        load_param_btn = QPushButton("Load params")
+        load_param_btn.setEnabled(False) #enable
+        load_param_btn.clicked.connect(self.load_params_from_file)
         clear_log_btn = QPushButton("Clear Log")
-        clear_log_btn.setEnabled(False) #disable for now
+        clear_log_btn.setEnabled(True) #enable
         clear_log_btn.clicked.connect(self.clear_log)
+        others_layout_3.addWidget(save_param_btn)
+        others_layout_3.addWidget(load_param_btn)
         others_layout_3.addWidget(clear_log_btn)
         others_form.addRow(others_layout_3)
         
@@ -850,8 +859,7 @@ class TomoGUI(QWidget):
         args = []
         for flag, (kind, w, include_cb, _default) in self.bhard_widgets.items():
             if include_cb is not None and not include_cb.isChecked():
-                continue #skip grayed lines
-
+                continue #skip grayed lines                
             if kind == "line":
                 val = w.text().strip()
                 if val != "":
@@ -865,7 +873,6 @@ class TomoGUI(QWidget):
                 args += [flag, str(w.value())]
             elif kind == "dspin":
                 args += [flag, str(w.value())]
-
         return args
         
         
@@ -1602,10 +1609,6 @@ class TomoGUI(QWidget):
         self.use_conf_box = QCheckBox("Enable config")
         self.use_conf_box.setChecked(False)
         func_box.addWidget(self.use_conf_box)
-        ge_conf_btn = QPushButton("Generate config file")
-        ge_conf_btn.clicked.connect(self.generate_config) #place holder
-        ge_conf_btn.setEnabled(False) #disable for now
-        func_box.addWidget(ge_conf_btn)
         load_config_btn = QPushButton("Load Config")
         save_config_btn = QPushButton("Save Config")
         load_config_btn.clicked.connect(self.load_config)
@@ -1766,27 +1769,137 @@ class TomoGUI(QWidget):
             with open(fn, "w") as f:
                 f.write(text)
     
-    def generate_config(self):
-        pass #place holder for future use
+    def save_params_to_file(self):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        fn = f"{self.data_path.text().strip()}/tomocupy_reconparams_{timestamp}.json"
+        for widgets in [self.param_widgets, self.phase_widgets, self.Geometry_widgets,
+                        self.bhard_widgets, self.rings_widgets, self.perf_widgets, self.data_widgets]:   
+            params = []  
+            for flag, (kind, w, include_cb, _default) in widgets.items():
+                if include_cb is not None and not include_cb.isChecked():
+                    continue #skip grayed lines
+                if kind == "line":
+                    val = w.text().strip()
+                    if val != "":
+                        params += [flag, val]
+                elif kind == "combo":
+                    params += [flag, w.currentText().strip()]
+                elif kind == "check":
+                    if w.isChecked():
+                        params += [flag]
+                elif kind == "spin":
+                    params += [flag, str(w.value())]
+                elif kind == "dspin":
+                    params += [flag, str(w.value())]
+            if params:
+                try:
+                    d_params = dict(params)
+                    with open(fn, "a") as f:
+                        json.dump(d_params, f, indent=2)
+                except Exception as e:
+                    self.log_output.append(f'\u274c Failed to save params to {fn}: {e}')
+        self.log_output.append(f'\u2705 Saved enabled params to {fn}')
+
+    def load_params_from_file(self):
+        start_dir = self.data_path.text().strip()
+        if not start_dir or not os.path.isdir(start_dir):
+            start_dir = os.path.expanduser("/")
+        dialog = QFileDialog(self, "Select params folder")
+        dialog.setFileMode(QFileDialog.ExistingFile)
+        dialog.setNameFilters(["JSON files (*.json)", "All files (*)"])
+        dialog.selectNameFilter("JSON files (*.json)")
+        dialog.setDirectory(start_dir)
+        if dialog.exec():
+            load_fn = dialog.selectedFiles()[0]
+        with open(load_fn, "r") as f:
+            try:
+                params = json.load(f)
+            except Exception as e:
+                self.log_output.append(f'\u274c Failed to load params from {load_fn}: {e}')
+                return
+        for key, v in params.items():
+            for widgets in [self.param_widgets, self.phase_widgets, self.Geometry_widgets,
+                            self.bhard_widgets, self.rings_widgets, self.perf_widgets, self.data_widgets]:   
+                if key in widgets.keys():
+                    kind, w, include_cb, _default = widgets[key]
+                    if include_cb is not None and not include_cb.isChecked():
+                        include_cb.setChecked(True)
+                    if kind == "line":
+                        w.setText(v)
+                    elif kind == "combo":
+                        if v in [w.itemText(i) for i in range(w.count())]:
+                            w.setCurrentText(v)
+                    elif kind == "check":
+                        w.setChecked(True)
+                    elif kind == "spin":
+                        try:
+                            iv = int(v)
+                            if w.minimum() <= iv <= w.maximum():
+                                w.setValue(iv)
+                        except Exception:
+                            pass
+                    elif kind == "dspin":
+                        try:
+                            fv = float(v)
+                            if w.minimum() <= fv <= w.maximum():
+                                w.setValue(fv)
+                        except Exception:
+                            pass
+        self.log_output.append(f'\u2705 Loaded params from {load_fn}')
+
     def clear_log(self):
-        pass #place holder for future use
-    def preset_absorption(self):
-        pass #place holder for future use
+        self.log_output.clear()
+
+    def preset_beamhardening(self):
+        enable_flags = ["--beamhardening-method", "--calculate-source",
+                        "--b-storage-ring","--e-storage-ring", 
+                        "--filter-1-auto", "--filter-1-density",
+                        "--filter-1-material", "--filter-1-thickness", 
+                        "--filter-2-auto","--filter-2-density",
+                        "--filter-2-material","--filter-2-thickness",
+                        "--filter-3-auto", "--filter-3-density", 
+                        "--filter-3-material","--filter-3-thickness",
+                        "--maximum-E","--maximum-psi-urad",
+                        "--minimum-E", "--read-pixel-size", 
+                        "--read-scintillator","--sample-density", 
+                        "--sample-material", "--scintillator-density", 
+                        "--scintillator-material", "--scintillator-thickness", 
+                        "--source-distance", "--step-E"]
+        for flag in enable_flags:
+            if flag in enable_flags:
+                kind, w, include_cb, _default = self.data_widgets[flag]
+                if include_cb is not None and not include_cb.isChecked():
+                    include_cb.setChecked(True)
+        self.log_output.append("Enable beamhardening params")
+
     def preset_phase(self):
-        enable_flags = {"--retrieve-phase-method", 
+        enable_flags = ["--retrieve-phase-method", 
                         "--pixel-size", 
                         "--propagation-distance", 
                         "--energy", 
-                        "--retrieve-phase-alpha"}
+                        "--retrieve-phase-alpha"]
         for flag in enable_flags:
             if flag in self.phase_widgets:
                 kind, w, include_cb, _default = self.phase_widgets[flag]
                 if include_cb is not None and not include_cb.isChecked():
                     include_cb.setChecked(True)
+        self.log_output.append("Enable phase params")
 
-        pass #place holder for future use
     def preset_laminography(self):
-        pass #place holder for future use
+        enable_flags = ["--lamino-angle", 
+                        "--lamino-end-row", 
+                        "--lamino-search-step", 
+                        "--lamino-search-width", 
+                        "--lamino-start-row"]
+        for flag in enable_flags:
+            if flag in self.Geometry_widgets:
+                kind, w, include_cb, _default = self.Geometry_widgets[flag]
+                if include_cb is not None and not include_cb.isChecked():
+                    include_cb.setChecked(True)
+        self.recon_way_box.setCurrentText("recon_steps")
+        self.recon_way_box_full.setCurrentText("recon_steps")
+        self.log_output.append("Enable laminography params, set recon way to recon_steps")
+        #place holder: any params need to disable?
 
     def abort_process(self):
         if not self.process:
