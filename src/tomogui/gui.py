@@ -194,7 +194,7 @@ class TomoGUI(QWidget):
         #left - row 7: preset parameters for recon
         others_layout_2 = QHBoxLayout()
         bhd_btn = QPushButton("BeamHarden") # preset for absorption recon
-        bhd_btn.setEnabled(False) #disable for now
+        bhd_btn.setEnabled(True) #enable
         bhd_btn.clicked.connect(self.preset_beamhardening)
         phase_btn = QPushButton("Phase") # preset for phase recon
         phase_btn.setEnabled(True) #enable
@@ -212,7 +212,7 @@ class TomoGUI(QWidget):
         save_param_btn.setEnabled(True) #enable
         save_param_btn.clicked.connect(self.save_params_to_file)
         load_param_btn = QPushButton("Load params")
-        load_param_btn.setEnabled(False) #enable
+        load_param_btn.setEnabled(True) #enable
         load_param_btn.clicked.connect(self.load_params_from_file)
         clear_log_btn = QPushButton("Clear Log")
         clear_log_btn.setEnabled(True) #enable
