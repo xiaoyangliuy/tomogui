@@ -1774,28 +1774,27 @@ class TomoGUI(QWidget):
         fn = f"{self.data_path.text().strip()}/tomocupy_reconparams_{timestamp}.json"
         for widgets in [self.param_widgets, self.phase_widgets, self.Geometry_widgets,
                         self.bhard_widgets, self.rings_widgets, self.perf_widgets, self.data_widgets]:   
-            params = []  
+            params = {} 
             for flag, (kind, w, include_cb, _default) in widgets.items():
                 if include_cb is not None and not include_cb.isChecked():
                     continue #skip grayed lines
                 if kind == "line":
                     val = w.text().strip()
                     if val != "":
-                        params += [flag, val]
+                        params[flag] = val
                 elif kind == "combo":
-                    params += [flag, w.currentText().strip()]
+                    params[flag] = w.currentText().strip()
                 elif kind == "check":
                     if w.isChecked():
-                        params += [flag]
+                        params[flag] = "checked"
                 elif kind == "spin":
-                    params += [flag, str(w.value())]
+                    params[flag] = str(w.value())
                 elif kind == "dspin":
-                    params += [flag, str(w.value())]
+                    params[flag] = str(w.value())
             if params:
                 try:
-                    d_params = dict(params)
                     with open(fn, "a") as f:
-                        json.dump(d_params, f, indent=2)
+                        json.dump(params, f, indent=2)
                 except Exception as e:
                     self.log_output.append(f'\u274c Failed to save params to {fn}: {e}')
         self.log_output.append(f'\u2705 Saved enabled params to {fn}')
@@ -1813,13 +1812,13 @@ class TomoGUI(QWidget):
         if dialog.exec():
             load_fn = dialog.selectedFiles()[0]
         if not load_fn or not os.path.isfile(load_fn):
-            self.log_output.append(f'\u274c Invalid file: {load_fn}')
+            self.log_output.append(f'<span style="color:red;">\u274c Invalid file: {load_fn}</span>')
             return
         with open(load_fn, "r") as f:
             try:
                 params = json.load(f)
             except Exception as e:
-                self.log_output.append(f'\u274c Failed to load params from {load_fn}: {e}')
+                self.log_output.append(f'<span style="color:red;">\u274c Failed to load params from {load_fn}: {e}</span>')
                 return
         for key, v in params.items():
             for widgets in [self.param_widgets, self.phase_widgets, self.Geometry_widgets,
