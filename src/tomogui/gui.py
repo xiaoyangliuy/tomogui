@@ -214,14 +214,21 @@ class TomoGUI(QWidget):
         load_param_btn = QPushButton("Load params")
         load_param_btn.setEnabled(True) #enable
         load_param_btn.clicked.connect(self.load_params_from_file)
-        clear_log_btn = QPushButton("Clear Log")
-        clear_log_btn.setEnabled(True) #enable
-        clear_log_btn.clicked.connect(self.clear_log)
+        reset_param_btn = QPushButton("Reset params")
+        reset_param_btn.setEnabled(False) #enable
+        reset_param_btn.clicked.connect(self.reset_init_params)
         others_layout_3.addWidget(save_param_btn)
         others_layout_3.addWidget(load_param_btn)
-        others_layout_3.addWidget(clear_log_btn)
+        others_layout_3.addWidget(reset_param_btn)
         others_form.addRow(others_layout_3)
-        
+        #left - row 9: more functions
+        others_layout_4 = QHBoxLayout()
+        clear_log_btn = QPushButton("Clear Log")
+        clear_log_btn.setEnabled(True) #enable
+        clear_log_btn.clicked.connect(self.clear_log)    
+        others_layout_4.addWidget(clear_log_btn)
+        others_form.addRow(others_layout_4)
+
         others.setLayout(others_form)
         try_form.addRow(others)
         try_box.setLayout(try_form)
@@ -622,6 +629,8 @@ class TomoGUI(QWidget):
             if tip:
                 w.setToolTip(tip)
             w.setFixedWidth(width)
+            if flag == "--nsino":
+                w.setText("0.5")
             _add_row(flag, "line", w, default="",include=include)
 
         def add_combo(flag, items, default=None, tip="", include=True):
@@ -679,8 +688,8 @@ class TomoGUI(QWidget):
 
         add_combo("--minus-log", ["True","False"], default="True", include=False) #always include
 
-        add_line("--nsino", "0.5 or [0,0.9]", include=False) #always include
-
+        add_line("--nsino", "", include=False) #always include
+        #add_line("--nsino", "0.5 or [0,0.9]", include=False) #always include
 #        add_dspin("--rotation-axis", -1e9, 1e9, step=0.01, default=-1.0)
 #        add_combo("--rotation-axis-auto", ["manual","auto"], default="manual")
         add_combo("--rotation-axis-method", ["sift","vo"], default="sift", include=False) #always include
@@ -1849,7 +1858,9 @@ class TomoGUI(QWidget):
                         except Exception:
                             pass
         self.log_output.append(f'\u2705 Loaded params from {load_fn}')
-
+    def reset_init_params(self):
+        pass
+    
     def clear_log(self):
         self.log_output.clear()
 
