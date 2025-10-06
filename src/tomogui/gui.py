@@ -1811,7 +1811,7 @@ class TomoGUI(QWidget):
         dialog.setDirectory(start_dir)
         if dialog.exec():
             load_fn = dialog.selectedFiles()[0]
-        if not load_fn or not os.path.isfile(load_fn):
+        if not os.path.isfile(load_fn):
             self.log_output.append(f'\u274c Invalid file: {load_fn}')
             return
         with open(load_fn, "r") as f:
