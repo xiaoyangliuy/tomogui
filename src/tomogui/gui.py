@@ -1854,7 +1854,7 @@ class TomoGUI(QWidget):
         self.log_output.clear()
 
     def preset_beamhardening(self):
-        enable_flags = ["--beamhardening-method", "--calculate-source",
+        enable_flags = ["--beam-hardening-method", "--calculate-source",
                         "--b-storage-ring","--e-storage-ring", 
                         "--filter-1-auto", "--filter-1-density",
                         "--filter-1-material", "--filter-1-thickness", 
