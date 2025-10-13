@@ -386,7 +386,8 @@ class TomoGUI(QWidget):
         log_box_layout.addWidget(QLabel("Log Output:"))
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
-        self.log_output = "start GUI"
+        self.log_output.setStyleSheet("QTextEdit { font-size: 12.5pt; }")
+        self.log_output.append("Start tomoGUI")
         log_box_layout.addWidget(self.log_output)
         log_json_layout.addLayout(log_box_layout)
         #json_box_layout = QVBoxLayout()
