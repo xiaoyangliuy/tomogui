@@ -2385,9 +2385,9 @@ class TomoGUI(QWidget):
         self.raw_files_y = self._raw_h5['/exchange/data'].shape[1] # y in prj, z in recon
         self._raw_h5.close()
 
-        if os.path.exists(full_dir) & num_recon == self.raw_files_y:
+        if os.path.exists(full_dir) is True and num_recon == self.raw_files_y:
             status = "full_rec"
-        elif os.path.exists(full_dir) & num_recon < self.raw_files_y:
+        elif os.path.exists(full_dir) is True and num_recon < self.raw_files_y:
             status = "part_rec"
         elif os.path.exists(full_dir) is False:
             status = "no_rec"
