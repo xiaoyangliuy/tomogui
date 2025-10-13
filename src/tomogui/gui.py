@@ -266,8 +266,13 @@ class TomoGUI(QWidget):
         full_btn_layout.addWidget(self.view_btn)
         full_form.addRow(full_btn_layout)
         #right - row 4: Batch Full btn
+        batch_full_layout = QHBoxLayout()
         batch_full_btn = QPushButton("Batch Full")
         batch_full_btn.clicked.connect(self.batch_full_reconstruction)
+        refresh_json_btn = QPushButton("Refresh COR log")
+        refresh_json_btn.clicked.connect(self.refresh_cor_json)
+        batch_full_layout.addWidget(batch_full_btn)
+        batch_full_layout.addWidget(refresh_json_btn)
         full_form.addRow(batch_full_btn)
         #right - row 5: COR Log file
         json_box_layout = QVBoxLayout()
@@ -2301,7 +2306,7 @@ class TomoGUI(QWidget):
         size = len(data)
         try:
             for i, (proj_file, (cor_value,status)) in enumerate(data.items(), start=1):
-                if status == "no_rec":
+                if status == "no_rec" or status == "part_rec":
                     cmd += ["--file-name", proj_file]
                     cmd += ["--rotation-axis", str(cor_value)]
                     # Append Params
@@ -2412,10 +2417,10 @@ class TomoGUI(QWidget):
         json_path = os.path.join(data_folder, "rot_cen.json")
 
         if not os.path.exists(json_path):
-            self.log_output.append("\u26a0\ufe0f[WARNING] no rot_cen.json")
+            self.log_output.append("\u26a0\ufe0f[WARNING] no rot_cen.json, create one")
             with open(json_path, "w") as f:
                 json.dump(self.cor_data, f, indent=2)
-
+            return
         try:
             with open(json_path, "r") as f:
                 self.cor_data = json.load(f)
@@ -2427,6 +2432,46 @@ class TomoGUI(QWidget):
             self.log_output.append("\u2705[INFO] COR log reloaded.")
         except Exception as e:
             self.log_output.append(f"\u274c[ERROR] Failed to load COR log: {e}")
+            return
+        
+    def refresh_cor_json(self):
+        data_folder = self.data_path.text().strip()
+        self.refresh_btn.setEnabled(False)
+        json_path = os.path.join(data_folder, "rot_cen.json")
+        if not os.path.exists(json_path):
+            self.log_output.append("\u274c[ERROR] no rot_cen.json")
+            return
+        try:
+            with open(json_path, "r") as f:
+                self.cor_data = json.load(f)
+            self.cor_json_output.clear()
+            for k, (v1, v2) in self.cor_data.items():
+                base = os.path.splitext(os.path.basename(k))[0]
+                rec_f = f"{data_folder}_rec/{base}_rec"
+                if os.path.exists(rec_f) is False:
+                    v2 = "no_rec"
+                else:
+                    num_recon = len(glob.glob(f'{rec_f}/*.tiff'))
+                    prj = h5py.File(k, "r")
+                    num_prj = prj['/exchange/data'].shape[1] # y in prj, z in recon
+                    prj.close()
+                    if num_recon == num_prj:
+                        v2 = "full_rec"
+                    elif num_recon < num_prj:
+                        v2 = "part_rec"
+                self.cor_data[k] = (v1, v2)
+                last4 = base[-4:] #for 7bm
+                self.cor_json_output.append(f"{last4} : {v1} {v2}")
+            try:
+                with open(json_path, "w") as f:
+                    json.dump(self.cor_data, f, indent=2)
+                self.log_output.append(f"\u2705[INFO] COR refreshed")
+                self.refresh_btn.setEnabled(True)
+            except Exception as e:
+                self.log_output.append(f'<span style="color:red;">\u274cFailed to save new rot_cen.json: {e}</span>')
+                return
+        except Exception as e:
+            self.log_output.append(f'<span style="color:red;">\u274cFailed to refresh rot_cen.json: {e}</span>')
             return
 
     # ===== IMAGE VIEWING =====
@@ -2664,20 +2709,19 @@ class TomoGUI(QWidget):
             self.refresh_current_image()
 
     def reset_img_contrast(self): #link to Reset button
-        if self._current_img is not None:
-
-
-
-            if not isinstance(self._current_img_path, str):
-                self._current_img = self._safe_open_prj(self._current_img_path)
-            else:
-                self._current_img = self._safe_open_image(self._current_img_path)
+        if self._current_img == None:
+            self.log_output.append("\u26a0\ufe0f No image loaded to reset contrast.")
+            return
+        else:
             self.vmin, self.vmax = round(self._current_img.min(), 5), round(self._current_img.max(), 5)
             self.min_input.setText(str(self.vmin))
-            self.max_input.setText(str(self.vmax))
-            #self.refresh_current_image()
-        else:
-            self.log_output.append("No image loaded to reset contrast.")
+            self.max_input.setText(str(self.vmax))            
+            im = self.ax.images[0] if self.ax.images else None
+            if im is not None:
+                im.set_clim(self.vmin, self.vmax)
+                self.canvas.draw_idle()
+            else:
+                self.refresh_current_image()
 
     def update_raw_slice(self):
         self._keep_zoom = True
