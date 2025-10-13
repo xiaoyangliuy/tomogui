@@ -2712,7 +2712,7 @@ class TomoGUI(QWidget):
             self.refresh_current_image()
 
     def reset_img_contrast(self): #link to Reset button
-        if self._current_img == None:
+        if self._current_img is None:
             self.log_output.append("\u26a0\ufe0f No image loaded to reset contrast.")
             return
         else:
