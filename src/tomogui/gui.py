@@ -273,7 +273,7 @@ class TomoGUI(QWidget):
         refresh_json_btn.clicked.connect(self.refresh_cor_json)
         batch_full_layout.addWidget(batch_full_btn)
         batch_full_layout.addWidget(refresh_json_btn)
-        full_form.addRow(batch_full_btn)
+        full_form.addRow(batch_full_layout)
         #right - row 5: COR Log file
         json_box_layout = QVBoxLayout()
         json_box_layout.addWidget(QLabel("COR Log File:"))
