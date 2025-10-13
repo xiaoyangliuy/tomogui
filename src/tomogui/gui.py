@@ -2436,7 +2436,7 @@ class TomoGUI(QWidget):
         
     def refresh_cor_json(self):
         data_folder = self.data_path.text().strip()
-        self.refresh_btn.setEnabled(False)
+        self.refresh_json_btn.setEnabled(False)
         json_path = os.path.join(data_folder, "rot_cen.json")
         if not os.path.exists(json_path):
             self.log_output.append("\u274c[ERROR] no rot_cen.json")
@@ -2466,12 +2466,14 @@ class TomoGUI(QWidget):
                 with open(json_path, "w") as f:
                     json.dump(self.cor_data, f, indent=2)
                 self.log_output.append(f"\u2705[INFO] COR refreshed")
-                self.refresh_btn.setEnabled(True)
+                self.refresh_json_btn.setEnabled(True)
             except Exception as e:
+                self.refresh_cor_json_btn.setEnabled(True)
                 self.log_output.append(f'<span style="color:red;">\u274cFailed to save new rot_cen.json: {e}</span>')
                 return
         except Exception as e:
             self.log_output.append(f'<span style="color:red;">\u274cFailed to refresh rot_cen.json: {e}</span>')
+            self.refresh_json_btn.setEnabled(True)
             return
 
     # ===== IMAGE VIEWING =====
