@@ -1738,9 +1738,9 @@ class TomoGUI(QWidget):
 
         # File list table
         self.batch_file_table = QTableWidget()
-        self.batch_file_table.setColumnCount(7)
+        self.batch_file_table.setColumnCount(8)
         self.batch_file_table.setHorizontalHeaderLabels([
-            "Select", "Filename", "COR", "Status", "View Try", "View Full", "Actions"
+            "Select", "Filename", "Size", "COR", "Status", "View Try", "View Full", "Actions"
         ])
 
         # Configure table
@@ -1754,6 +1754,7 @@ class TomoGUI(QWidget):
         header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
         header.setSectionsClickable(True)  # Make headers clickable for sorting
 
         main_layout.addWidget(self.batch_file_table)
@@ -3287,6 +3288,14 @@ class TomoGUI(QWidget):
 
         return code
 
+    def _format_file_size(self, size_bytes):
+        """Format file size in human-readable format"""
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+            if size_bytes < 1024.0:
+                return f"{size_bytes:.1f} {unit}"
+            size_bytes /= 1024.0
+        return f"{size_bytes:.1f} PB"
+
     def _refresh_batch_file_list(self):
         """Refresh the file list in the batch processing tab"""
         folder = self.data_path.text()
@@ -3329,28 +3338,40 @@ class TomoGUI(QWidget):
             # Filename
             self.batch_file_table.setItem(row, 1, QTableWidgetItem(filename))
 
+            # File size
+            try:
+                file_size = os.path.getsize(file_path)
+                size_str = self._format_file_size(file_size)
+                size_item = QTableWidgetItem(size_str)
+                size_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                # Store numeric value for proper sorting
+                size_item.setData(Qt.UserRole, file_size)
+                self.batch_file_table.setItem(row, 2, size_item)
+            except Exception as e:
+                self.batch_file_table.setItem(row, 2, QTableWidgetItem("N/A"))
+
             # COR value (editable)
             cor_input = QLineEdit()
             cor_input.setPlaceholderText("COR value")
             cor_input.setAlignment(Qt.AlignCenter)
             cor_input.setFixedWidth(80)
-            self.batch_file_table.setCellWidget(row, 2, cor_input)
+            self.batch_file_table.setCellWidget(row, 3, cor_input)
             file_info['cor_input'] = cor_input
 
             # Status
             status_item = QTableWidgetItem('Ready')
-            self.batch_file_table.setItem(row, 3, status_item)
+            self.batch_file_table.setItem(row, 4, status_item)
             file_info['status_item'] = status_item
 
             # View Try button
             view_try_btn = QPushButton("View Try")
             view_try_btn.clicked.connect(lambda checked, fp=file_path: self._batch_view_try(fp))
-            self.batch_file_table.setCellWidget(row, 4, view_try_btn)
+            self.batch_file_table.setCellWidget(row, 5, view_try_btn)
 
             # View Full button
             view_full_btn = QPushButton("View Full")
             view_full_btn.clicked.connect(lambda checked, fp=file_path: self._batch_view_full(fp))
-            self.batch_file_table.setCellWidget(row, 5, view_full_btn)
+            self.batch_file_table.setCellWidget(row, 6, view_full_btn)
 
             # Actions button
             actions_widget = QWidget()
@@ -3368,7 +3389,7 @@ class TomoGUI(QWidget):
             full_btn.clicked.connect(lambda checked, fp=file_path: self._batch_run_full_single(fp))
             actions_layout.addWidget(full_btn)
 
-            self.batch_file_table.setCellWidget(row, 6, actions_widget)
+            self.batch_file_table.setCellWidget(row, 7, actions_widget)
 
         self.batch_status_label.setText(f"Loaded {len(h5_files)} files")
 
