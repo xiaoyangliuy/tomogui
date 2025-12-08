@@ -1714,6 +1714,16 @@ class TomoGUI(QWidget):
         refresh_list_btn.clicked.connect(self._refresh_batch_file_list)
         controls_layout.addWidget(refresh_list_btn)
 
+        save_cor_btn = QPushButton("Save COR to CSV")
+        save_cor_btn.clicked.connect(self._batch_save_cor_csv)
+        save_cor_btn.setToolTip("Save COR values to batch_cor_values.csv in data folder")
+        controls_layout.addWidget(save_cor_btn)
+
+        load_cor_btn = QPushButton("Load COR from CSV")
+        load_cor_btn.clicked.connect(self._batch_load_cor_csv)
+        load_cor_btn.setToolTip("Load COR values from batch_cor_values.csv in data folder")
+        controls_layout.addWidget(load_cor_btn)
+
         controls_layout.addStretch()
 
         select_all_btn = QPushButton("Select All")
@@ -1728,14 +1738,13 @@ class TomoGUI(QWidget):
 
         # File list table
         self.batch_file_table = QTableWidget()
-        self.batch_file_table.setColumnCount(6)
+        self.batch_file_table.setColumnCount(7)
         self.batch_file_table.setHorizontalHeaderLabels([
-            "Select", "Filename", "Status", "View Try", "View Full", "Actions"
+            "Select", "Filename", "COR", "Status", "View Try", "View Full", "Actions"
         ])
 
         # Configure table
         self.batch_file_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.batch_file_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         header = self.batch_file_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.Stretch)
@@ -1743,8 +1752,36 @@ class TomoGUI(QWidget):
         header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
 
         main_layout.addWidget(self.batch_file_table)
+
+        # Machine and GPU configuration
+        machine_layout = QHBoxLayout()
+        machine_layout.addWidget(QLabel("Target Machine:"))
+
+        self.batch_machine_box = QComboBox()
+        self.batch_machine_box.addItems(["Local", "tomo1", "tomo2", "tomo3", "tomo4", "tomo5"])
+        self.batch_machine_box.setCurrentText("Local")
+        self.batch_machine_box.setToolTip("Select machine to run batch reconstructions")
+        machine_layout.addWidget(self.batch_machine_box)
+
+        machine_layout.addSpacing(20)
+        machine_layout.addWidget(QLabel("GPUs per machine:"))
+
+        self.batch_gpus_per_machine = QSpinBox()
+        self.batch_gpus_per_machine.setMinimum(1)
+        self.batch_gpus_per_machine.setMaximum(8)
+        self.batch_gpus_per_machine.setValue(1)
+        self.batch_gpus_per_machine.setToolTip("Number of GPUs available on the target machine (1 job per GPU)")
+        machine_layout.addWidget(self.batch_gpus_per_machine)
+
+        machine_layout.addSpacing(20)
+        self.batch_queue_label = QLabel("Queue: 0 jobs waiting")
+        machine_layout.addWidget(self.batch_queue_label)
+
+        machine_layout.addStretch()
+        main_layout.addLayout(machine_layout)
 
         # Batch operations
         batch_ops_layout = QHBoxLayout()
@@ -1785,6 +1822,9 @@ class TomoGUI(QWidget):
         self.batch_file_list = []
         self.batch_current_index = 0
         self.batch_running = False
+        self.batch_job_queue = []  # Queue of pending jobs
+        self.batch_running_jobs = {}  # Dict of currently running jobs: {gpu_id: (process, file_info)}
+        self.batch_available_gpus = []  # List of available GPU IDs
 
 
     # ===== HELPER METHODS =====
@@ -3137,6 +3177,120 @@ class TomoGUI(QWidget):
 
     # ===== BATCH PROCESSING METHODS =====
 
+    def _get_batch_machine_command(self, cmd, machine):
+        """
+        Wrap command for remote execution via SSH if needed
+
+        Args:
+            cmd: List of command arguments (e.g., ["tomocupy", "recon", ...])
+            machine: Machine name ("Local", "tomo1", etc.)
+
+        Returns:
+            List of command arguments, potentially wrapped in SSH
+        """
+        if machine == "Local":
+            return cmd
+
+        # Build SSH command to execute on remote machine
+        # Assumes SSH keys are set up for passwordless login
+        # Properly quote arguments for shell execution
+        remote_cmd = " ".join([f'"{str(arg)}"' if " " in str(arg) else str(arg) for arg in cmd])
+
+        # Use SSH to execute the command on the remote machine
+        ssh_cmd = ["ssh", machine, remote_cmd]
+
+        return ssh_cmd
+
+    def _run_reconstruction_on_machine(self, file_path, recon_type='try'):
+        """
+        Run reconstruction on selected machine (local or remote)
+
+        Args:
+            file_path: Path to the .h5 file
+            recon_type: 'try' or 'full'
+
+        Returns:
+            Exit code (0 for success)
+        """
+        machine = self.batch_machine_box.currentText()
+
+        # Get reconstruction parameters
+        recon_way = self.recon_way_box.currentText()
+        cor_method = self.cor_method_box.currentText()
+
+        # Check if we have a COR value from the batch table for this file
+        filename = os.path.basename(file_path)
+        batch_cor_value = None
+        for file_info in self.batch_file_list:
+            if file_info['filename'] == filename:
+                batch_cor_value = file_info['cor_input'].text().strip()
+                break
+
+        # Use batch COR value if available, otherwise use the main COR input
+        if batch_cor_value:
+            cor_val = batch_cor_value
+            self.log_output.append(f'📍 Using COR value from batch table: {cor_val} for {filename}')
+        else:
+            cor_val = self.cor_input.text().strip()
+
+        # Validate COR input
+        if cor_method == "manual":
+            try:
+                cor = float(cor_val) if cor_val else None
+                if cor is None:
+                    self.log_output.append(f'<span style="color:red;">❌ No COR value provided for {filename}</span>')
+                    return -1
+            except ValueError:
+                self.log_output.append(f'<span style="color:red;">❌ Invalid rotation axis value for {filename}: {cor_val}</span>')
+                return -1
+
+        gpu = self.cuda_box_try.currentText().strip() if recon_type == 'try' else self.cuda_box_full.currentText().strip()
+
+        # Build command
+        if self.use_conf_box.isChecked():
+            config_editor = self.config_editor_try if recon_type == 'try' else self.config_editor_full
+            config_text = config_editor.toPlainText()
+            if not config_text.strip():
+                self.log_output.append(f'<span style="color:red;">⚠️ No config text</span>')
+                return -1
+
+            temp_conf = os.path.join(self.data_path.text(), f"temp_{recon_type}.conf")
+            with open(temp_conf, "w") as f:
+                f.write(config_text)
+
+            cmd = ["tomocupy", str(recon_way),
+                   "--reconstruction-type", recon_type,
+                   "--config", temp_conf,
+                   "--file-name", file_path]
+
+            if cor_method == "auto":
+                cmd += ["--rotation-axis-auto", "auto"]
+            else:
+                cmd += ["--rotation-axis-auto", "manual", "--rotation-axis", str(cor)]
+        else:
+            cmd = ["tomocupy", str(recon_way),
+                   "--reconstruction-type", recon_type,
+                   "--file-name", file_path]
+
+            if cor_method == "auto":
+                cmd += ["--rotation-axis-auto", "auto"]
+            else:
+                cmd += ["--rotation-axis-auto", "manual", "--rotation-axis", str(cor)]
+
+        # Wrap command for remote execution if needed
+        cmd = self._get_batch_machine_command(cmd, machine)
+
+        # Log the machine being used
+        if machine != "Local":
+            self.log_output.append(f'🖥️ Running on {machine}: {os.path.basename(file_path)}')
+
+        # Execute command
+        code = self.run_command_live(cmd, proj_file=file_path,
+                                     job_label=f"{recon_type}-{machine}",
+                                     wait=True, cuda_devices=gpu if machine == "Local" else None)
+
+        return code
+
     def _refresh_batch_file_list(self):
         """Refresh the file list in the batch processing tab"""
         folder = self.data_path.text()
@@ -3179,20 +3333,28 @@ class TomoGUI(QWidget):
             # Filename
             self.batch_file_table.setItem(row, 1, QTableWidgetItem(filename))
 
+            # COR value (editable)
+            cor_input = QLineEdit()
+            cor_input.setPlaceholderText("COR value")
+            cor_input.setAlignment(Qt.AlignCenter)
+            cor_input.setFixedWidth(80)
+            self.batch_file_table.setCellWidget(row, 2, cor_input)
+            file_info['cor_input'] = cor_input
+
             # Status
             status_item = QTableWidgetItem('Ready')
-            self.batch_file_table.setItem(row, 2, status_item)
+            self.batch_file_table.setItem(row, 3, status_item)
             file_info['status_item'] = status_item
 
             # View Try button
             view_try_btn = QPushButton("View Try")
             view_try_btn.clicked.connect(lambda checked, fp=file_path: self._batch_view_try(fp))
-            self.batch_file_table.setCellWidget(row, 3, view_try_btn)
+            self.batch_file_table.setCellWidget(row, 4, view_try_btn)
 
             # View Full button
             view_full_btn = QPushButton("View Full")
             view_full_btn.clicked.connect(lambda checked, fp=file_path: self._batch_view_full(fp))
-            self.batch_file_table.setCellWidget(row, 4, view_full_btn)
+            self.batch_file_table.setCellWidget(row, 5, view_full_btn)
 
             # Actions button
             actions_widget = QWidget()
@@ -3210,9 +3372,95 @@ class TomoGUI(QWidget):
             full_btn.clicked.connect(lambda checked, fp=file_path: self._batch_run_full_single(fp))
             actions_layout.addWidget(full_btn)
 
-            self.batch_file_table.setCellWidget(row, 5, actions_widget)
+            self.batch_file_table.setCellWidget(row, 6, actions_widget)
 
         self.batch_status_label.setText(f"Loaded {len(h5_files)} files")
+
+        # Try to auto-load COR values if CSV exists
+        self._batch_load_cor_csv(silent=True)
+
+    def _batch_save_cor_csv(self):
+        """Save COR values to CSV file in the data directory"""
+        folder = self.data_path.text()
+        if not folder or not os.path.isdir(folder):
+            QMessageBox.warning(self, "Warning", "Please select a valid data folder first.")
+            return
+
+        if not self.batch_file_list:
+            QMessageBox.warning(self, "Warning", "No files in the batch list.")
+            return
+
+        csv_path = os.path.join(folder, "batch_cor_values.csv")
+
+        try:
+            import csv
+            with open(csv_path, 'w', newline='') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(['Filename', 'COR'])
+
+                for file_info in self.batch_file_list:
+                    filename = file_info['filename']
+                    cor_value = file_info['cor_input'].text().strip()
+                    writer.writerow([filename, cor_value])
+
+            self.log_output.append(f'<span style="color:green;">✅ Saved COR values to {csv_path}</span>')
+            self.batch_status_label.setText(f"COR values saved to batch_cor_values.csv")
+            QMessageBox.information(self, "Success", f"COR values saved to:\n{csv_path}")
+
+        except Exception as e:
+            self.log_output.append(f'<span style="color:red;">❌ Failed to save COR CSV: {e}</span>')
+            QMessageBox.critical(self, "Error", f"Failed to save COR values:\n{e}")
+
+    def _batch_load_cor_csv(self, silent=False):
+        """Load COR values from CSV file in the data directory"""
+        folder = self.data_path.text()
+        if not folder or not os.path.isdir(folder):
+            if not silent:
+                QMessageBox.warning(self, "Warning", "Please select a valid data folder first.")
+            return
+
+        if not self.batch_file_list:
+            if not silent:
+                QMessageBox.warning(self, "Warning", "No files in the batch list. Refresh the file list first.")
+            return
+
+        csv_path = os.path.join(folder, "batch_cor_values.csv")
+
+        if not os.path.exists(csv_path):
+            if not silent:
+                QMessageBox.warning(self, "Warning", f"COR CSV file not found:\n{csv_path}")
+            return
+
+        try:
+            import csv
+            cor_dict = {}
+            with open(csv_path, 'r') as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    filename = row.get('Filename', '').strip()
+                    cor_value = row.get('COR', '').strip()
+                    if filename:
+                        cor_dict[filename] = cor_value
+
+            # Apply COR values to the table
+            loaded_count = 0
+            for file_info in self.batch_file_list:
+                filename = file_info['filename']
+                if filename in cor_dict:
+                    file_info['cor_input'].setText(cor_dict[filename])
+                    loaded_count += 1
+
+            if not silent:
+                self.log_output.append(f'<span style="color:green;">✅ Loaded COR values from {csv_path}</span>')
+                self.batch_status_label.setText(f"Loaded {loaded_count} COR values from CSV")
+                QMessageBox.information(self, "Success", f"Loaded {loaded_count} COR values from:\n{csv_path}")
+            else:
+                self.batch_status_label.setText(f"Loaded {len(self.batch_file_list)} files ({loaded_count} with COR values)")
+
+        except Exception as e:
+            if not silent:
+                self.log_output.append(f'<span style="color:red;">❌ Failed to load COR CSV: {e}</span>')
+                QMessageBox.critical(self, "Error", f"Failed to load COR values:\n{e}")
 
     def _batch_select_all(self):
         """Select all files in the batch list"""
@@ -3362,94 +3610,227 @@ class TomoGUI(QWidget):
                 break
 
     def _batch_run_try_selected(self):
-        """Run try reconstruction on all selected files"""
+        """Run try reconstruction on all selected files with GPU queue management"""
         selected_files = [f for f in self.batch_file_list if f['checkbox'].isChecked()]
+        machine = self.batch_machine_box.currentText()
 
         if not selected_files:
             QMessageBox.warning(self, "Warning", "No files selected.")
             return
+
+        num_gpus = self.batch_gpus_per_machine.value()
+        machine_text = f" on {machine}" if machine != "Local" else ""
 
         reply = QMessageBox.question(
             self, 'Confirm Batch Try',
-            f'Run try reconstruction on {len(selected_files)} selected files?',
+            f'Run try reconstruction on {len(selected_files)} selected files{machine_text}?\n'
+            f'Using {num_gpus} GPU(s) in parallel.',
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No
         )
 
         if reply == QMessageBox.No:
             return
 
-        self.batch_running = True
-        self.batch_current_index = 0
-        total = len(selected_files)
-
-        for i, file_info in enumerate(selected_files):
-            self.batch_current_index = i + 1
-            progress = int((i / total) * 100)
-            self.batch_progress_bar.setValue(progress)
-            self.batch_status_label.setText(f"Processing {i+1}/{total}: {file_info['filename']}")
-
-            file_info['status_item'].setText('Running Try...')
-            QApplication.processEvents()
-
-            # Set file and run
-            index = self.proj_file_box.findData(file_info['path'])
-            if index >= 0:
-                self.proj_file_box.setCurrentIndex(index)
-                self.try_reconstruction()
-                file_info['status_item'].setText('Try Complete')
-            else:
-                file_info['status_item'].setText('Error: File not found')
-
-            QApplication.processEvents()
-
-        self.batch_progress_bar.setValue(100)
-        self.batch_status_label.setText(f"Batch try complete: {total} files processed")
-        self.batch_running = False
+        self._run_batch_with_queue(selected_files, recon_type='try', num_gpus=num_gpus, machine=machine)
 
     def _batch_run_full_selected(self):
-        """Run full reconstruction on all selected files"""
+        """Run full reconstruction on all selected files with GPU queue management"""
         selected_files = [f for f in self.batch_file_list if f['checkbox'].isChecked()]
+        machine = self.batch_machine_box.currentText()
 
         if not selected_files:
             QMessageBox.warning(self, "Warning", "No files selected.")
             return
 
+        num_gpus = self.batch_gpus_per_machine.value()
+        machine_text = f" on {machine}" if machine != "Local" else ""
+
         reply = QMessageBox.question(
             self, 'Confirm Batch Full Reconstruction',
-            f'Run full reconstruction on {len(selected_files)} selected files?\nThis may take a long time.',
+            f'Run full reconstruction on {len(selected_files)} selected files{machine_text}?\n'
+            f'Using {num_gpus} GPU(s) in parallel.\nThis may take a long time.',
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No
         )
 
         if reply == QMessageBox.No:
             return
 
+        self._run_batch_with_queue(selected_files, recon_type='full', num_gpus=num_gpus, machine=machine)
+
+    def _run_batch_with_queue(self, selected_files, recon_type, num_gpus, machine):
+        """
+        Run batch reconstructions with GPU queue management
+
+        Args:
+            selected_files: List of file info dictionaries
+            recon_type: 'try' or 'full'
+            num_gpus: Number of GPUs to use in parallel
+            machine: Target machine name
+        """
         self.batch_running = True
-        self.batch_current_index = 0
+        self.batch_job_queue = list(selected_files)  # Copy the list
+        self.batch_running_jobs = {}
+        self.batch_available_gpus = list(range(num_gpus))  # GPUs 0, 1, 2, etc.
+
         total = len(selected_files)
+        completed = 0
 
-        for i, file_info in enumerate(selected_files):
-            self.batch_current_index = i + 1
-            progress = int((i / total) * 100)
+        self.batch_status_label.setText(f"Starting batch {recon_type} on {machine} with {num_gpus} GPU(s)")
+        self.batch_progress_bar.setValue(0)
+        QApplication.processEvents()
+
+        # Keep processing until queue is empty and all jobs are done
+        while self.batch_job_queue or self.batch_running_jobs:
+            # Start new jobs if GPUs are available and jobs are queued
+            while self.batch_available_gpus and self.batch_job_queue:
+                gpu_id = self.batch_available_gpus.pop(0)
+                file_info = self.batch_job_queue.pop(0)
+
+                # Update status
+                file_info['status_item'].setText(f'Running {recon_type} on GPU {gpu_id}...')
+                queue_len = len(self.batch_job_queue)
+                self.batch_queue_label.setText(f"Queue: {queue_len} jobs waiting")
+                QApplication.processEvents()
+
+                # Start job asynchronously
+                process = self._start_batch_job_async(file_info, recon_type, gpu_id, machine)
+                self.batch_running_jobs[gpu_id] = (process, file_info)
+
+                self.log_output.append(f'🚀 Started {recon_type} on GPU {gpu_id}: {file_info["filename"]}')
+
+            # Check for completed jobs
+            completed_gpus = []
+            for gpu_id, (process, file_info) in list(self.batch_running_jobs.items()):
+                if process.state() == QProcess.NotRunning:
+                    # Job finished
+                    exit_code = process.exitCode()
+                    completed += 1
+
+                    if exit_code == 0:
+                        file_info['status_item'].setText(f'{recon_type.capitalize()} Complete')
+                        self.log_output.append(f'<span style="color:green;">✅ GPU {gpu_id} finished: {file_info["filename"]}</span>')
+                    else:
+                        file_info['status_item'].setText(f'{recon_type.capitalize()} Failed')
+                        self.log_output.append(f'<span style="color:red;">❌ GPU {gpu_id} failed: {file_info["filename"]}</span>')
+
+                    completed_gpus.append(gpu_id)
+
+            # Free up completed GPUs
+            for gpu_id in completed_gpus:
+                del self.batch_running_jobs[gpu_id]
+                self.batch_available_gpus.append(gpu_id)
+                self.batch_available_gpus.sort()
+
+            # Update progress
+            progress = int((completed / total) * 100)
             self.batch_progress_bar.setValue(progress)
-            self.batch_status_label.setText(f"Processing {i+1}/{total}: {file_info['filename']}")
-
-            file_info['status_item'].setText('Running Full...')
-            QApplication.processEvents()
-
-            # Set file and run
-            index = self.proj_file_box.findData(file_info['path'])
-            if index >= 0:
-                self.proj_file_box.setCurrentIndex(index)
-                self.full_reconstruction()
-                file_info['status_item'].setText('Full Complete')
-            else:
-                file_info['status_item'].setText('Error: File not found')
+            self.batch_status_label.setText(
+                f"Completed {completed}/{total} | Running: {len(self.batch_running_jobs)} | Queue: {len(self.batch_job_queue)}"
+            )
 
             QApplication.processEvents()
+
+            # Small delay to prevent CPU spinning
+            if self.batch_running_jobs:
+                import time
+                time.sleep(0.1)
 
         self.batch_progress_bar.setValue(100)
-        self.batch_status_label.setText(f"Batch full reconstruction complete: {total} files processed")
+        self.batch_status_label.setText(f"Batch {recon_type} complete: {total} files processed on {machine}")
+        self.batch_queue_label.setText("Queue: 0 jobs waiting")
         self.batch_running = False
+        self.log_output.append(f'<span style="color:green;">🏁 Batch {recon_type} finished: {completed} files completed</span>')
+
+    def _start_batch_job_async(self, file_info, recon_type, gpu_id, machine):
+        """
+        Start a reconstruction job asynchronously
+
+        Args:
+            file_info: File information dictionary
+            recon_type: 'try' or 'full'
+            gpu_id: GPU ID to use
+            machine: Target machine
+
+        Returns:
+            QProcess object
+        """
+        file_path = file_info['path']
+        filename = os.path.basename(file_path)
+
+        # Get reconstruction parameters
+        recon_way = self.recon_way_box.currentText()
+        cor_method = self.cor_method_box.currentText()
+
+        # Get COR value from batch table
+        batch_cor_value = file_info['cor_input'].text().strip()
+        if batch_cor_value:
+            cor_val = batch_cor_value
+        else:
+            cor_val = self.cor_input.text().strip()
+
+        # Validate COR
+        if cor_method == "manual":
+            try:
+                cor = float(cor_val) if cor_val else None
+                if cor is None:
+                    self.log_output.append(f'<span style="color:orange;">⚠️  No COR for {filename}, skipping</span>')
+                    # Return a dummy finished process
+                    p = QProcess(self)
+                    p.start("echo", ["skipped"])
+                    p.waitForFinished()
+                    return p
+            except ValueError:
+                self.log_output.append(f'<span style="color:orange;">⚠️  Invalid COR for {filename}, skipping</span>')
+                p = QProcess(self)
+                p.start("echo", ["skipped"])
+                p.waitForFinished()
+                return p
+
+        # Build command
+        if self.use_conf_box.isChecked():
+            config_editor = self.config_editor_try if recon_type == 'try' else self.config_editor_full
+            config_text = config_editor.toPlainText()
+
+            temp_conf = os.path.join(self.data_path.text(), f"temp_{recon_type}_gpu{gpu_id}.conf")
+            with open(temp_conf, "w") as f:
+                f.write(config_text)
+
+            cmd = ["tomocupy", str(recon_way),
+                   "--reconstruction-type", recon_type,
+                   "--config", temp_conf,
+                   "--file-name", file_path]
+
+            if cor_method == "auto":
+                cmd += ["--rotation-axis-auto", "auto"]
+            else:
+                cmd += ["--rotation-axis-auto", "manual", "--rotation-axis", str(cor)]
+        else:
+            cmd = ["tomocupy", str(recon_way),
+                   "--reconstruction-type", recon_type,
+                   "--file-name", file_path]
+
+            if cor_method == "auto":
+                cmd += ["--rotation-axis-auto", "auto"]
+            else:
+                cmd += ["--rotation-axis-auto", "manual", "--rotation-axis", str(cor)]
+
+        # Wrap for remote execution if needed
+        cmd = self._get_batch_machine_command(cmd, machine)
+
+        # Create and configure process
+        p = QProcess(self)
+        p.setProcessChannelMode(QProcess.ForwardedChannels)
+
+        # Set CUDA_VISIBLE_DEVICES for GPU assignment (only for local execution)
+        if machine == "Local":
+            env = QProcessEnvironment.systemEnvironment()
+            env.insert("CUDA_VISIBLE_DEVICES", str(gpu_id))
+            p.setProcessEnvironment(env)
+
+        # Start process
+        p.start(str(cmd[0]), [str(a) for a in cmd[1:]])
+
+        return p
 
     # ===== THEME METHODS =====
 
