@@ -3303,6 +3303,18 @@ class TomoGUI(QWidget):
         # Get all .h5 files
         h5_files = sorted(glob.glob(os.path.join(folder, "*.h5")), key=os.path.getmtime, reverse=True)
 
+        # Save current COR values before clearing (to preserve user input)
+        cor_values = {}
+        for file_info in self.batch_file_list:
+            try:
+                filename = file_info['filename']
+                cor_val = file_info['cor_input'].text().strip()
+                if cor_val:
+                    cor_values[filename] = cor_val
+            except (KeyError, RuntimeError):
+                # Widget may have been deleted
+                pass
+
         # Clear existing table
         self.batch_file_table.setRowCount(0)
         self.batch_file_list = []
@@ -3352,6 +3364,9 @@ class TomoGUI(QWidget):
             cor_input.setPlaceholderText("COR value")
             cor_input.setAlignment(Qt.AlignCenter)
             cor_input.setFixedWidth(80)
+            # Restore previous COR value if it exists
+            if filename in cor_values:
+                cor_input.setText(cor_values[filename])
             self.batch_file_table.setCellWidget(row, 3, cor_input)
             file_info['cor_input'] = cor_input
 
@@ -3395,8 +3410,14 @@ class TomoGUI(QWidget):
 
         self.batch_status_label.setText(f"Loaded {len(h5_files)} files")
 
-        # Try to auto-load COR values if CSV exists
-        self._batch_load_cor_csv(silent=True)
+        # Try to auto-load COR values from CSV if no values were preserved from previous refresh
+        # Only auto-load if we don't already have COR values
+        if not cor_values:
+            self._batch_load_cor_csv(silent=True)
+        else:
+            # Count how many COR values were restored
+            restored_count = len(cor_values)
+            self.batch_status_label.setText(f"Loaded {len(h5_files)} files ({restored_count} with COR values)")
 
     def _batch_save_cor_csv(self):
         """Save COR values to CSV file in the data directory"""
