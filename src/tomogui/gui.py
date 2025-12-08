@@ -1745,6 +1745,7 @@ class TomoGUI(QWidget):
 
         # Configure table
         self.batch_file_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.batch_file_table.setSortingEnabled(True)  # Enable column sorting
         header = self.batch_file_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.Stretch)
@@ -1753,6 +1754,7 @@ class TomoGUI(QWidget):
         header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        header.setSectionsClickable(True)  # Make headers clickable for sorting
 
         main_layout.addWidget(self.batch_file_table)
 
@@ -3214,34 +3216,28 @@ class TomoGUI(QWidget):
         """
         machine = self.batch_machine_box.currentText()
 
-        # Get reconstruction parameters
+        # Get reconstruction parameters from Main tab
         recon_way = self.recon_way_box.currentText()
         cor_method = self.cor_method_box.currentText()
 
-        # Check if we have a COR value from the batch table for this file
+        # Get COR value EXCLUSIVELY from the batch table for this file
         filename = os.path.basename(file_path)
-        batch_cor_value = None
+        cor_val = None
         for file_info in self.batch_file_list:
             if file_info['filename'] == filename:
-                batch_cor_value = file_info['cor_input'].text().strip()
+                cor_val = file_info['cor_input'].text().strip()
                 break
 
-        # Use batch COR value if available, otherwise use the main COR input
-        if batch_cor_value:
-            cor_val = batch_cor_value
-            self.log_output.append(f'📍 Using COR value from batch table: {cor_val} for {filename}')
-        else:
-            cor_val = self.cor_input.text().strip()
-
-        # Validate COR input
+        # Validate COR input - batch tab requires COR to be set in table
         if cor_method == "manual":
+            if not cor_val:
+                self.log_output.append(f'<span style="color:red;">❌ No COR value in batch table for {filename}</span>')
+                return -1
             try:
-                cor = float(cor_val) if cor_val else None
-                if cor is None:
-                    self.log_output.append(f'<span style="color:red;">❌ No COR value provided for {filename}</span>')
-                    return -1
+                cor = float(cor_val)
+                self.log_output.append(f'📍 Using COR value from batch table: {cor_val} for {filename}')
             except ValueError:
-                self.log_output.append(f'<span style="color:red;">❌ Invalid rotation axis value for {filename}: {cor_val}</span>')
+                self.log_output.append(f'<span style="color:red;">❌ Invalid COR value "{cor_val}" for {filename}</span>')
                 return -1
 
         gpu = self.cuda_box_try.currentText().strip() if recon_type == 'try' else self.cuda_box_full.currentText().strip()
@@ -3757,30 +3753,26 @@ class TomoGUI(QWidget):
         file_path = file_info['path']
         filename = os.path.basename(file_path)
 
-        # Get reconstruction parameters
+        # Get reconstruction parameters from Main tab
         recon_way = self.recon_way_box.currentText()
         cor_method = self.cor_method_box.currentText()
 
-        # Get COR value from batch table
-        batch_cor_value = file_info['cor_input'].text().strip()
-        if batch_cor_value:
-            cor_val = batch_cor_value
-        else:
-            cor_val = self.cor_input.text().strip()
+        # Get COR value EXCLUSIVELY from batch table (not from Main tab)
+        cor_val = file_info['cor_input'].text().strip()
 
-        # Validate COR
+        # Validate COR - batch tab requires COR value to be set
         if cor_method == "manual":
+            if not cor_val:
+                self.log_output.append(f'<span style="color:orange;">⚠️  No COR value in batch table for {filename}, skipping</span>')
+                # Return a dummy finished process
+                p = QProcess(self)
+                p.start("echo", ["skipped"])
+                p.waitForFinished()
+                return p
             try:
-                cor = float(cor_val) if cor_val else None
-                if cor is None:
-                    self.log_output.append(f'<span style="color:orange;">⚠️  No COR for {filename}, skipping</span>')
-                    # Return a dummy finished process
-                    p = QProcess(self)
-                    p.start("echo", ["skipped"])
-                    p.waitForFinished()
-                    return p
+                cor = float(cor_val)
             except ValueError:
-                self.log_output.append(f'<span style="color:orange;">⚠️  Invalid COR for {filename}, skipping</span>')
+                self.log_output.append(f'<span style="color:red;">❌ Invalid COR value "{cor_val}" for {filename}, skipping</span>')
                 p = QProcess(self)
                 p.start("echo", ["skipped"])
                 p.waitForFinished()
