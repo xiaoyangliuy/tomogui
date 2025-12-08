@@ -3688,9 +3688,12 @@ class TomoGUI(QWidget):
             if index >= 0:
                 self.proj_file_box.setCurrentIndex(index)
 
-        # Temporarily set the Main tab COR to the batch table value
+        # Temporarily set BOTH Main tab COR inputs to the batch table value
+        # (Try and Full have separate COR inputs)
         original_cor = self.cor_input.text()
+        original_cor_full = self.cor_input_full.text()
         self.cor_input.setText(batch_cor)
+        self.cor_input_full.setText(batch_cor)
         self.log_output.append(f'📍 Using COR from batch table: {batch_cor} for {os.path.basename(file_path)}')
 
         # Update status in batch table
@@ -3700,8 +3703,9 @@ class TomoGUI(QWidget):
         # Call the existing full reconstruction method
         self.full_reconstruction()
 
-        # Restore original COR value in Main tab
+        # Restore original COR values in Main tab
         self.cor_input.setText(original_cor)
+        self.cor_input_full.setText(original_cor_full)
 
         # Update status
         file_info['status_item'].setText('Full Complete')
