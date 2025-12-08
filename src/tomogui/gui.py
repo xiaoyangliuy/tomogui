@@ -3374,6 +3374,19 @@ class TomoGUI(QWidget):
             QMessageBox.warning(self, "Warning", "Please select a valid data folder first.")
             return
 
+        # Warn if queue is running
+        if self.batch_running:
+            reply = QMessageBox.question(
+                self, 'Queue Running',
+                f'A batch queue is currently running ({len(self.batch_running_jobs)} jobs active, {len(self.batch_job_queue)} queued).\n\n'
+                f'Refreshing will delete the table widgets but jobs will continue running in the background.\n\n'
+                f'Continue with refresh?',
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            )
+            if reply == QMessageBox.No:
+                return
+            self.log_output.append(f'<span style="color:orange;">⚠️  Refreshed file list while queue was running - status updates may be lost</span>')
+
         # Get all .h5 files
         h5_files = sorted(glob.glob(os.path.join(folder, "*.h5")), key=os.path.getmtime, reverse=True)
 
@@ -3806,9 +3819,13 @@ class TomoGUI(QWidget):
         # Add jobs to queue with their type and machine info
         jobs_to_add = [(f, recon_type, machine) for f in selected_files]
 
-        # Mark all jobs as queued
+        # Mark all jobs as queued (safely handle deleted widgets)
         for f, _, _ in jobs_to_add:
-            f['status_item'].setText('Queued')
+            try:
+                f['status_item'].setText('Queued')
+            except RuntimeError:
+                # Widget was deleted, skip status update
+                pass
 
         # If queue is already running, just add to it
         if self.batch_running:
@@ -3843,8 +3860,12 @@ class TomoGUI(QWidget):
                 job_tuple = self.batch_job_queue.pop(0)
                 file_info, job_recon_type, job_machine = job_tuple
 
-                # Update status
-                file_info['status_item'].setText(f'Running on GPU {gpu_id}')
+                # Update status (safely handle deleted widgets)
+                try:
+                    file_info['status_item'].setText(f'Running on GPU {gpu_id}')
+                except RuntimeError:
+                    # Widget was deleted, skip status update
+                    pass
                 queue_len = len(self.batch_job_queue)
                 self.batch_queue_label.setText(f"Queue: {len(self.batch_job_queue)} jobs waiting")
                 QApplication.processEvents()
@@ -3863,12 +3884,17 @@ class TomoGUI(QWidget):
                     exit_code = process.exitCode()
                     self.batch_completed_jobs += 1
 
-                    if exit_code == 0:
-                        file_info['status_item'].setText(f'{job_recon_type.capitalize()} Complete')
-                        self.log_output.append(f'<span style="color:green;">✅ GPU {gpu_id} finished: {file_info["filename"]}</span>')
-                    else:
-                        file_info['status_item'].setText(f'{job_recon_type.capitalize()} Failed')
-                        self.log_output.append(f'<span style="color:red;">❌ GPU {gpu_id} failed: {file_info["filename"]}</span>')
+                    # Safely update status (widget may have been deleted if list was refreshed)
+                    try:
+                        if exit_code == 0:
+                            file_info['status_item'].setText(f'{job_recon_type.capitalize()} Complete')
+                            self.log_output.append(f'<span style="color:green;">✅ GPU {gpu_id} finished: {file_info["filename"]}</span>')
+                        else:
+                            file_info['status_item'].setText(f'{job_recon_type.capitalize()} Failed')
+                            self.log_output.append(f'<span style="color:red;">❌ GPU {gpu_id} failed: {file_info["filename"]}</span>')
+                    except RuntimeError:
+                        # Widget was deleted (e.g., user refreshed the list)
+                        self.log_output.append(f'<span style="color:gray;">✅ GPU {gpu_id} finished: {file_info["filename"]} (widget deleted)</span>')
 
                     completed_gpus.append(gpu_id)
 
@@ -3926,14 +3952,20 @@ class TomoGUI(QWidget):
         for gpu_id, (process, file_info, job_recon_type) in list(self.batch_running_jobs.items()):
             try:
                 process.kill()
-                file_info['status_item'].setText('Cancelled')
+                try:
+                    file_info['status_item'].setText('Cancelled')
+                except RuntimeError:
+                    pass  # Widget was deleted
                 self.log_output.append(f'<span style="color:orange;">⚠️  Killed job on GPU {gpu_id}: {file_info["filename"]}</span>')
             except:
                 pass
 
         # Clear queued jobs
         for file_info, job_recon_type, job_machine in self.batch_job_queue:
-            file_info['status_item'].setText('Cancelled')
+            try:
+                file_info['status_item'].setText('Cancelled')
+            except RuntimeError:
+                pass  # Widget was deleted
 
         # Reset queue state
         self.batch_job_queue = []
