@@ -57,6 +57,9 @@ class TomoGUI(QWidget):
         self._current_img_path = None
         self.cor_data = {}
 
+        # Batch selection state for shift-click
+        self.batch_last_clicked_row = None
+
         main_layout = QHBoxLayout()
 
         # ==== LEFT PANEL ====
@@ -3293,6 +3296,68 @@ class TomoGUI(QWidget):
             size_bytes /= 1024.0
         return f"{size_bytes:.1f} PB"
 
+    def _batch_checkbox_clicked(self, row, checked):
+        """
+        Handle checkbox clicks with shift-click support for range selection
+        If shift is held, select all rows between last click and current click
+        """
+        from PyQt5.QtWidgets import QApplication
+
+        modifiers = QApplication.keyboardModifiers()
+        from PyQt5.QtCore import Qt
+
+        if modifiers == Qt.ShiftModifier and self.batch_last_clicked_row is not None:
+            # Shift-click: select range
+            start_row = min(self.batch_last_clicked_row, row)
+            end_row = max(self.batch_last_clicked_row, row)
+
+            # Get the first selected row's COR value for propagation
+            first_cor = None
+            first_filename = None
+            for file_info in self.batch_file_list:
+                if file_info['row'] == start_row:
+                    first_cor = file_info['cor_input'].text().strip()
+                    first_filename = file_info['filename']
+                    break
+
+            # Validate that first row has COR value
+            if not first_cor:
+                QMessageBox.warning(
+                    self, "Missing COR",
+                    f"The first selected file ({first_filename}) must have a COR value.\n"
+                    f"Please enter a COR value for this file before shift-selecting."
+                )
+                # Uncheck the current checkbox since shift-select failed
+                for file_info in self.batch_file_list:
+                    if file_info['row'] == row:
+                        file_info['checkbox'].setChecked(False)
+                        break
+                return
+
+            # Select all rows in range and propagate COR if not set
+            for r in range(start_row, end_row + 1):
+                for file_info in self.batch_file_list:
+                    if file_info['row'] == r:
+                        # Check the checkbox
+                        file_info['checkbox'].setChecked(True)
+
+                        # Propagate COR from first if this row doesn't have one
+                        current_cor = file_info['cor_input'].text().strip()
+                        if not current_cor and first_cor:
+                            file_info['cor_input'].setText(first_cor)
+                        break
+
+            self.log_output.append(f'<span style="color:green;">✅ Selected rows {start_row} to {end_row} ({end_row - start_row + 1} files)</span>')
+            if first_cor:
+                propagated_count = sum(1 for r in range(start_row, end_row + 1)
+                                     for f in self.batch_file_list
+                                     if f['row'] == r and f['cor_input'].text().strip() == first_cor)
+                if propagated_count > 1:  # More than just the first one
+                    self.log_output.append(f'<span style="color:blue;">📍 Propagated COR value {first_cor} to {propagated_count - 1} file(s)</span>')
+
+        # Update last clicked row
+        self.batch_last_clicked_row = row
+
     def _refresh_batch_file_list(self):
         """Refresh the file list in the batch processing tab"""
         folder = self.data_path.text()
@@ -3334,8 +3399,9 @@ class TomoGUI(QWidget):
             }
             self.batch_file_list.append(file_info)
 
-            # Checkbox for selection
+            # Checkbox for selection with shift-click support
             checkbox = QCheckBox()
+            checkbox.clicked.connect(lambda checked, r=row: self._batch_checkbox_clicked(r, checked))
             checkbox_widget = QWidget()
             checkbox_layout = QHBoxLayout(checkbox_widget)
             checkbox_layout.addWidget(checkbox)
