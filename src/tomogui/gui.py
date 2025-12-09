@@ -3553,15 +3553,9 @@ class TomoGUI(QWidget):
 
             self.batch_file_table.setCellWidget(row, 8, actions_widget)
 
-            # Apply colored background based on reconstruction status
-            # Green for full, orange for try only, red for none
-            bg_color = QColor(row_color).lighter(170)  # Lighten the color for better readability
-
-            # Apply background color to all items in the row
-            for col in [1, 2, 4]:  # Filename, Size, Status columns
-                item = self.batch_file_table.item(row, col)
-                if item:
-                    item.setBackground(bg_color)
+            # Apply colored left border indicator based on reconstruction status
+            # Create a colored indicator in the checkbox column
+            checkbox_widget.setStyleSheet(f"QWidget {{ border-left: 6px solid {row_color}; }}")
 
         # Re-enable sorting after populating the table
         self.batch_file_table.setSortingEnabled(True)
