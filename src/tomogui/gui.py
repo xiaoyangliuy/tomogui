@@ -2994,12 +2994,12 @@ class TomoGUI(QWidget):
             extent=[0, w, h, 0]
         )
 
-        # Build title with source filename
+        # Build title with source filename - LARGE and VISIBLE
         if hasattr(self, '_current_source_file') and hasattr(self, '_current_view_mode'):
             title = f"{self._current_source_file} [{self._current_view_mode}] - {os.path.basename(str(img_path))}"
         else:
             title = os.path.basename(str(img_path))
-        self.ax.set_title(title, pad=5.5, fontsize=10)
+        self.ax.set_title(title, pad=15, fontsize=16, fontweight='bold')
         self.ax.set_aspect('equal', adjustable='box')  # square pixels; obey zoom limits without warnings
         if (self._keep_zoom and
             self._last_image_shape == (h, w) and
