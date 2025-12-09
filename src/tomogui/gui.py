@@ -3401,6 +3401,41 @@ class TomoGUI(QWidget):
         # Update last clicked row
         self.batch_last_clicked_row = row
 
+    def _update_row_color(self, file_info):
+        """Update the row color based on current reconstruction status"""
+        try:
+            # Check reconstruction status
+            data_folder = self.data_path.text().strip()
+            filename = file_info['filename']
+            proj_name = os.path.splitext(filename)[0]
+            try_dir = os.path.join(f"{data_folder}_rec", "try_center", proj_name)
+            full_dir = os.path.join(f"{data_folder}_rec", f"{proj_name}_rec")
+
+            has_try = os.path.isdir(try_dir) and len(glob.glob(os.path.join(try_dir, "*.tiff"))) > 0
+            has_full = os.path.isdir(full_dir) and len(glob.glob(os.path.join(full_dir, "*.tiff"))) > 0
+
+            # Determine new color
+            if has_full:
+                row_color = "green"
+            elif has_try:
+                row_color = "orange"
+            else:
+                row_color = "red"
+
+            # Update the checkbox widget border color
+            if 'checkbox' in file_info:
+                checkbox = file_info['checkbox']
+                checkbox_widget = checkbox.parentWidget()
+                if checkbox_widget:
+                    checkbox_widget.setStyleSheet(f"QWidget {{ border-left: 6px solid {row_color}; }}")
+
+            # Update stored status
+            file_info['recon_status'] = row_color
+
+        except Exception as e:
+            # Silently ignore errors (widget might be deleted)
+            pass
+
     def _refresh_batch_file_list(self):
         """Refresh the file list in the batch processing tab"""
         folder = self.data_path.text()
@@ -3972,6 +4007,8 @@ class TomoGUI(QWidget):
                         if exit_code == 0:
                             file_info['status_item'].setText(f'{job_recon_type.capitalize()} Complete')
                             self.log_output.append(f'<span style="color:green;">✅ GPU {gpu_id} finished: {file_info["filename"]}</span>')
+                            # Update row color based on new reconstruction status
+                            self._update_row_color(file_info)
                         else:
                             file_info['status_item'].setText(f'{job_recon_type.capitalize()} Failed')
                             self.log_output.append(f'<span style="color:red;">❌ GPU {gpu_id} failed: {file_info["filename"]}</span>')
