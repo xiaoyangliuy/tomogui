@@ -3528,18 +3528,32 @@ class TomoGUI(QWidget):
 
         try:
             import csv
+            saved_count = 0
+            skipped_count = 0
+
             with open(csv_path, 'w', newline='') as csvfile:
                 writer = csv.writer(csvfile)
                 writer.writerow(['Filename', 'COR'])
 
                 for file_info in self.batch_file_list:
-                    filename = file_info['filename']
-                    cor_value = file_info['cor_input'].text().strip()
-                    writer.writerow([filename, cor_value])
+                    try:
+                        filename = file_info['filename']
+                        cor_value = file_info['cor_input'].text().strip()
+                        writer.writerow([filename, cor_value])
+                        saved_count += 1
+                    except (RuntimeError, KeyError):
+                        # Widget was deleted (e.g., file was removed)
+                        skipped_count += 1
+                        continue
 
-            self.log_output.append(f'<span style="color:green;">✅ Saved COR values to {csv_path}</span>')
-            self.batch_status_label.setText(f"COR values saved to batch_cor_values.csv")
-            QMessageBox.information(self, "Success", f"COR values saved to:\n{csv_path}")
+            if skipped_count > 0:
+                self.log_output.append(f'<span style="color:orange;">⚠️  Saved {saved_count} COR values to {csv_path} ({skipped_count} skipped - widgets deleted)</span>')
+                self.batch_status_label.setText(f"COR values saved ({skipped_count} files skipped)")
+                QMessageBox.information(self, "Success", f"COR values saved to:\n{csv_path}\n\n{saved_count} saved, {skipped_count} skipped (deleted files)")
+            else:
+                self.log_output.append(f'<span style="color:green;">✅ Saved {saved_count} COR values to {csv_path}</span>')
+                self.batch_status_label.setText(f"COR values saved to batch_cor_values.csv")
+                QMessageBox.information(self, "Success", f"COR values saved to:\n{csv_path}")
 
         except Exception as e:
             self.log_output.append(f'<span style="color:red;">❌ Failed to save COR CSV: {e}</span>')
@@ -3578,16 +3592,27 @@ class TomoGUI(QWidget):
 
             # Apply COR values to the table
             loaded_count = 0
+            skipped_count = 0
             for file_info in self.batch_file_list:
-                filename = file_info['filename']
-                if filename in cor_dict:
-                    file_info['cor_input'].setText(cor_dict[filename])
-                    loaded_count += 1
+                try:
+                    filename = file_info['filename']
+                    if filename in cor_dict:
+                        file_info['cor_input'].setText(cor_dict[filename])
+                        loaded_count += 1
+                except (RuntimeError, KeyError):
+                    # Widget was deleted (e.g., file was removed)
+                    skipped_count += 1
+                    continue
 
             if not silent:
-                self.log_output.append(f'<span style="color:green;">✅ Loaded COR values from {csv_path}</span>')
-                self.batch_status_label.setText(f"Loaded {loaded_count} COR values from CSV")
-                QMessageBox.information(self, "Success", f"Loaded {loaded_count} COR values from:\n{csv_path}")
+                if skipped_count > 0:
+                    self.log_output.append(f'<span style="color:orange;">⚠️  Loaded {loaded_count} COR values from {csv_path} ({skipped_count} skipped - widgets deleted)</span>')
+                    self.batch_status_label.setText(f"Loaded {loaded_count} COR values ({skipped_count} skipped)")
+                    QMessageBox.information(self, "Success", f"Loaded {loaded_count} COR values from:\n{csv_path}\n\n{skipped_count} files skipped (deleted widgets)")
+                else:
+                    self.log_output.append(f'<span style="color:green;">✅ Loaded COR values from {csv_path}</span>')
+                    self.batch_status_label.setText(f"Loaded {loaded_count} COR values from CSV")
+                    QMessageBox.information(self, "Success", f"Loaded {loaded_count} COR values from:\n{csv_path}")
             else:
                 self.batch_status_label.setText(f"Loaded {len(self.batch_file_list)} files ({loaded_count} with COR values)")
 
