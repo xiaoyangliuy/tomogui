@@ -1813,6 +1813,10 @@ class TomoGUI(QWidget):
         self.batch_stop_btn.setEnabled(False)
         batch_ops_layout.addWidget(self.batch_stop_btn)
 
+        batch_upload_btn = QPushButton("Upload to Tomolog")
+        batch_upload_btn.clicked.connect(self._batch_upload_to_tomolog)
+        batch_ops_layout.addWidget(batch_upload_btn)
+
         batch_ops_layout.addStretch()
 
         remove_selected_btn = QPushButton("Remove Selected from List")
@@ -4052,6 +4056,112 @@ class TomoGUI(QWidget):
         self.batch_running = False
         self.batch_stop_btn.setEnabled(False)
         self.log_output.append(f'<span style="color:green;">🏁 Batch queue finished: {self.batch_completed_jobs} files completed</span>')
+
+    def _batch_upload_to_tomolog(self):
+        """Upload selected files to tomolog with 4-second delay between each"""
+        selected_files = [f for f in self.batch_file_list if f['checkbox'].isChecked()]
+
+        if not selected_files:
+            QMessageBox.warning(self, "Warning", "No files selected.")
+            return
+
+        # Confirm upload
+        reply = QMessageBox.question(
+            self, 'Confirm Tomolog Upload',
+            f'Upload {len(selected_files)} selected file(s) to Tomolog?\n\n'
+            f'There will be a 4-second delay between each upload.',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+
+        if reply == QMessageBox.No:
+            return
+
+        # Get tomolog parameters from the main UI
+        beamline = self.beamline_box.currentText()
+        cloud = self.cloud_box.currentText()
+        url = self.url_input.text().strip()
+        x = self.x_input.text().strip()
+        y = self.y_input.text().strip()
+        z = self.z_input.text().strip()
+        vmin = self.min_input.text().strip()
+        vmax = self.max_input.text().strip()
+        extra_params = self.extra_params_input.text().strip()
+
+        self.log_output.append(f'<span style="color:blue;">🚀 Starting batch upload to Tomolog: {len(selected_files)} file(s)</span>')
+
+        success_count = 0
+        failed_count = 0
+
+        for idx, file_info in enumerate(selected_files):
+            input_fn = file_info['path']
+            filename = file_info['filename']
+
+            # Update status
+            try:
+                file_info['status_item'].setText('Uploading...')
+            except RuntimeError:
+                pass
+
+            QApplication.processEvents()
+
+            # Get note value
+            note_value = self.get_note_value()
+
+            # Build tomolog command
+            cmd = [
+                "tomolog", "run",
+                "--beamline", beamline,
+                "--file-name", input_fn,
+                "--cloud", cloud,
+                "--presentation-url", url,
+                "--idx", x,
+                "--idy", y,
+                "--idz", z,
+                "--note", note_value
+            ]
+            if vmin:
+                cmd.extend(["--min", vmin])
+            if vmax:
+                cmd.extend(["--max", vmax])
+            if extra_params:
+                cmd.extend(extra_params.split())
+
+            self.log_output.append(f'<span style="color:blue;">📤 Uploading {idx + 1}/{len(selected_files)}: {filename}</span>')
+
+            # Run the upload
+            code = self.run_command_live(cmd, proj_file=input_fn, job_label="tomolog", wait=True, cuda_devices=None)
+
+            # Update status based on result
+            try:
+                if code == 0:
+                    file_info['status_item'].setText('Uploaded')
+                    self.log_output.append(f'<span style="color:green;">✅ Uploaded: {filename}</span>')
+                    success_count += 1
+                else:
+                    file_info['status_item'].setText('Upload Failed')
+                    self.log_output.append(f'<span style="color:red;">❌ Upload failed: {filename}</span>')
+                    failed_count += 1
+            except RuntimeError:
+                # Widget deleted
+                pass
+
+            QApplication.processEvents()
+
+            # Add 4-second delay between uploads (except after the last one)
+            if idx < len(selected_files) - 1:
+                self.log_output.append(f'<span style="color:gray;">⏳ Waiting 4 seconds before next upload...</span>')
+                QApplication.processEvents()
+                import time
+                time.sleep(4)
+
+        # Final summary
+        self.log_output.append(f'<span style="color:green;">🏁 Batch upload complete: {success_count} succeeded, {failed_count} failed</span>')
+        QMessageBox.information(
+            self, "Upload Complete",
+            f"Batch upload finished!\n\n"
+            f"✅ Succeeded: {success_count}\n"
+            f"❌ Failed: {failed_count}"
+        )
 
     def _batch_stop_queue(self):
         """Stop the batch queue and kill all running processes"""
