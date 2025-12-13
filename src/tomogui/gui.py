@@ -4389,7 +4389,8 @@ class TomoGUI(QWidget):
                     cor_value = float(match.group(1))
                     # Sanity check: COR should be a reasonable value (not 0 or negative, typically < 10000)
                     if 0 < cor_value < 10000:
-                        return cor_value
+                        # Round to 1 decimal place
+                        return round(cor_value, 1)
                 except ValueError:
                     continue
 
