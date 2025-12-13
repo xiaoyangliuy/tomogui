@@ -4045,6 +4045,16 @@ class TomoGUI(QWidget):
                                 try:
                                     file_info['cor_input'].setText(str(cor_value))
                                     self.log_output.append(f'<span style="color:green;">🎯 Auto-detected COR for {file_info["filename"]}: {cor_value}</span>')
+
+                                    # If this file is marked for sync auto-full, queue Full reconstruction now
+                                    if file_info.get('sync_auto_full', False):
+                                        machine = file_info.get('sync_machine', 'Local')
+                                        num_gpus = file_info.get('sync_num_gpus', 1)
+                                        self.log_output.append(f'<span style="color:blue;">🔄 Auto-queuing Full reconstruction for {file_info["filename"]}</span>')
+                                        # Remove the sync flag to avoid re-queuing
+                                        file_info['sync_auto_full'] = False
+                                        # Queue Full reconstruction
+                                        self._run_batch_with_queue([file_info], recon_type='full', num_gpus=num_gpus, machine=machine)
                                 except RuntimeError:
                                     pass  # Widget was deleted
 
@@ -4269,16 +4279,17 @@ class TomoGUI(QWidget):
 
                 if file_info:
                     self.log_output.append(f'<span style="color:green;">🚀 Auto-processing: {filename}</span>')
-                    # Add to queue: Try first, then Full
+                    # Add to queue: Try first, then Full will be queued after COR is found
                     machine = self.batch_machine_box.currentText()
                     num_gpus = self.batch_gpus_per_machine.value()
 
+                    # Mark this file for auto-Full after Try completes
+                    file_info['sync_auto_full'] = True
+                    file_info['sync_machine'] = machine
+                    file_info['sync_num_gpus'] = num_gpus
+
                     # Queue Try reconstruction first
                     self._run_batch_with_queue([file_info], recon_type='try', num_gpus=num_gpus, machine=machine)
-
-                    # TODO: After try completes, extract COR and queue Full
-                    # For now, queue Full immediately (they'll run sequentially)
-                    self._run_batch_with_queue([file_info], recon_type='full', num_gpus=num_gpus, machine=machine)
 
     def _extract_cor_from_output(self, output):
         """
