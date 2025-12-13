@@ -4049,31 +4049,54 @@ class TomoGUI(QWidget):
 
                     # Extract COR value if this was an auto COR job
                     if exit_code == 0 and job_recon_type == 'try':
+                        self.log_output.append(f'<span style="color:cyan;">🔍 Try job completed for {file_info["filename"]}, checking for COR extraction...</span>')
+
                         use_auto_cor = process.property('use_auto_cor')
+                        self.log_output.append(f'<span style="color:cyan;">   use_auto_cor = {use_auto_cor}</span>')
 
                         # Try to extract COR value from output
                         cor_value = None
                         if use_auto_cor:
                             # Read accumulated output buffer
                             output = process.property('output_buffer') or ''
+                            self.log_output.append(f'<span style="color:cyan;">   Output buffer length: {len(output)} bytes</span>')
 
                             # Log a sample of the output for debugging
-                            output_preview = output[-500:] if len(output) > 500 else output
-                            self.log_output.append(f'<span style="color:gray;">📝 Output sample (last 500 chars): {output_preview}</span>')
+                            if len(output) > 0:
+                                output_preview = output[-1000:] if len(output) > 1000 else output
+                                self.log_output.append(f'<span style="color:gray;">📝 Output sample (last 1000 chars):\n{output_preview}</span>')
+                            else:
+                                self.log_output.append(f'<span style="color:red;">❌ Output buffer is EMPTY!</span>')
 
                             cor_value = self._extract_cor_from_output(output)
+                            self.log_output.append(f'<span style="color:cyan;">   Extracted COR value: {cor_value}</span>')
+
                             if cor_value is not None:
                                 try:
-                                    file_info['cor_input'].setText(str(cor_value))
-                                    self.log_output.append(f'<span style="color:green;">🎯 Auto-detected COR for {file_info["filename"]}: {cor_value}</span>')
-                                except RuntimeError:
-                                    pass  # Widget was deleted
+                                    # Check if cor_input exists
+                                    if 'cor_input' in file_info:
+                                        old_value = file_info['cor_input'].text()
+                                        file_info['cor_input'].setText(str(cor_value))
+                                        new_value = file_info['cor_input'].text()
+                                        self.log_output.append(f'<span style="color:green;">🎯 Auto-detected COR for {file_info["filename"]}: {cor_value}</span>')
+                                        self.log_output.append(f'<span style="color:cyan;">   Field updated: "{old_value}" → "{new_value}"</span>')
+                                    else:
+                                        self.log_output.append(f'<span style="color:red;">❌ cor_input field not found in file_info!</span>')
+                                except RuntimeError as e:
+                                    self.log_output.append(f'<span style="color:red;">❌ RuntimeError setting COR: {e}</span>')
+                                except Exception as e:
+                                    self.log_output.append(f'<span style="color:red;">❌ Error setting COR: {e}</span>')
                             else:
-                                self.log_output.append(f'<span style="color:orange;">⚠️  Could not extract COR from output for {file_info["filename"]} (output length: {len(output)})</span>')
+                                self.log_output.append(f'<span style="color:orange;">⚠️  Could not extract COR from output for {file_info["filename"]}</span>')
+                        else:
+                            self.log_output.append(f'<span style="color:yellow;">   Skipping COR extraction (not auto mode)</span>')
 
                         # If this file is marked for sync auto-full, queue Full reconstruction now
                         # Queue it regardless of whether COR was found (will use auto mode if no COR)
-                        if file_info.get('sync_auto_full', False):
+                        sync_auto_full = file_info.get('sync_auto_full', False)
+                        self.log_output.append(f'<span style="color:cyan;">   sync_auto_full flag: {sync_auto_full}</span>')
+
+                        if sync_auto_full:
                             try:
                                 machine = file_info.get('sync_machine', 'Local')
                                 num_gpus = file_info.get('sync_num_gpus', 1)
@@ -4082,8 +4105,10 @@ class TomoGUI(QWidget):
                                 file_info['sync_auto_full'] = False
                                 # Queue Full reconstruction
                                 self._run_batch_with_queue([file_info], recon_type='full', num_gpus=num_gpus, machine=machine)
-                            except RuntimeError:
-                                pass  # Widget was deleted
+                            except RuntimeError as e:
+                                self.log_output.append(f'<span style="color:red;">❌ RuntimeError queuing Full: {e}</span>')
+                            except Exception as e:
+                                self.log_output.append(f'<span style="color:red;">❌ Error queuing Full: {e}</span>')
 
                     # Safely update status (widget may have been deleted if list was refreshed)
                     try:
@@ -4331,16 +4356,22 @@ class TomoGUI(QWidget):
         """
         import re
 
-        # Look for patterns like "rotation axis: 1234.5" or "COR: 1234.5"
+        # Look for patterns like "set rotaion axis 604.43" (note: tomocupy has typo "rotaion")
         # Common tomocupy output patterns for auto-detected COR
         patterns = [
+            # tomocupy pattern: "set rotaion axis 604.430908203125" (with typo!)
+            r'set\s+rotaion\s+axis\s+([0-9]+\.?[0-9]*)',
+            # Just in case they fix the typo: "set rotation axis 604.43"
+            r'set\s+rotation\s+axis\s+([0-9]+\.?[0-9]*)',
             # Standard patterns with colon or equals
             r'rotation\s*axis\s*[:=]\s*([0-9]+\.?[0-9]*)',
+            r'rotaion\s*axis\s*[:=]\s*([0-9]+\.?[0-9]*)',
             r'rotation-axis\s*[:=]\s*([0-9]+\.?[0-9]*)',
             r'COR\s*[:=]\s*([0-9]+\.?[0-9]*)',
             r'center\s*[:=]\s*([0-9]+\.?[0-9]*)',
             # Patterns with "is" or "found"
             r'rotation\s*axis\s+(?:is\s+)?([0-9]+\.?[0-9]*)',
+            r'rotaion\s*axis\s+(?:is\s+)?([0-9]+\.?[0-9]*)',
             r'COR\s+(?:is\s+|found\s+)?([0-9]+\.?[0-9]*)',
             # Patterns in brackets or parentheses
             r'rotation\s*axis\s*[\(\[]\s*([0-9]+\.?[0-9]*)\s*[\)\]]',
@@ -4348,6 +4379,7 @@ class TomoGUI(QWidget):
             r'auto.*?[:=]\s*([0-9]+\.?[0-9]*)',
             # Generic "axis" patterns
             r'axis\s*[:=]\s*([0-9]+\.?[0-9]*)',
+            r'axis\s+([0-9]+\.?[0-9]*)',
         ]
 
         for pattern in patterns:
