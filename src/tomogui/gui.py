@@ -3474,9 +3474,10 @@ class TomoGUI(QWidget):
         # Get all .h5 files
         h5_files = sorted(glob.glob(os.path.join(folder, "*.h5")), key=os.path.getmtime, reverse=True)
 
-        # Save current COR values and checkbox states before clearing (to preserve user input)
+        # Save current COR values, checkbox states, and sync flags before clearing (to preserve user input)
         cor_values = {}
         checkbox_states = {}
+        sync_flags = {}
         for file_info in self.batch_file_list:
             try:
                 filename = file_info['filename']
@@ -3487,6 +3488,13 @@ class TomoGUI(QWidget):
                 is_checked = file_info['checkbox'].isChecked()
                 if is_checked:
                     checkbox_states[filename] = True
+                # Save sync mode flags
+                if file_info.get('sync_auto_full', False):
+                    sync_flags[filename] = {
+                        'sync_auto_full': True,
+                        'sync_machine': file_info.get('sync_machine', 'Local'),
+                        'sync_num_gpus': file_info.get('sync_num_gpus', 1)
+                    }
             except (KeyError, RuntimeError):
                 # Widget may have been deleted
                 pass
@@ -3537,6 +3545,11 @@ class TomoGUI(QWidget):
             # Restore checkbox state if it was previously checked
             if filename in checkbox_states:
                 checkbox.setChecked(True)
+            # Restore sync flags if this file was being processed in sync mode
+            if filename in sync_flags:
+                file_info['sync_auto_full'] = sync_flags[filename]['sync_auto_full']
+                file_info['sync_machine'] = sync_flags[filename]['sync_machine']
+                file_info['sync_num_gpus'] = sync_flags[filename]['sync_num_gpus']
             checkbox_widget = QWidget()
             checkbox_layout = QHBoxLayout(checkbox_widget)
             checkbox_layout.addWidget(checkbox)
@@ -4035,28 +4048,42 @@ class TomoGUI(QWidget):
                     self.batch_completed_jobs += 1
 
                     # Extract COR value if this was an auto COR job
-                    if exit_code == 0:
+                    if exit_code == 0 and job_recon_type == 'try':
                         use_auto_cor = process.property('use_auto_cor')
-                        if use_auto_cor and job_recon_type == 'try':
-                            # Read process output to extract COR
-                            output = process.readAllStandardOutput().data().decode('utf-8', errors='ignore')
+
+                        # Try to extract COR value from output
+                        cor_value = None
+                        if use_auto_cor:
+                            # Read accumulated output buffer
+                            output = process.property('output_buffer') or ''
+
+                            # Log a sample of the output for debugging
+                            output_preview = output[-500:] if len(output) > 500 else output
+                            self.log_output.append(f'<span style="color:gray;">📝 Output sample (last 500 chars): {output_preview}</span>')
+
                             cor_value = self._extract_cor_from_output(output)
                             if cor_value is not None:
                                 try:
                                     file_info['cor_input'].setText(str(cor_value))
                                     self.log_output.append(f'<span style="color:green;">🎯 Auto-detected COR for {file_info["filename"]}: {cor_value}</span>')
-
-                                    # If this file is marked for sync auto-full, queue Full reconstruction now
-                                    if file_info.get('sync_auto_full', False):
-                                        machine = file_info.get('sync_machine', 'Local')
-                                        num_gpus = file_info.get('sync_num_gpus', 1)
-                                        self.log_output.append(f'<span style="color:blue;">🔄 Auto-queuing Full reconstruction for {file_info["filename"]}</span>')
-                                        # Remove the sync flag to avoid re-queuing
-                                        file_info['sync_auto_full'] = False
-                                        # Queue Full reconstruction
-                                        self._run_batch_with_queue([file_info], recon_type='full', num_gpus=num_gpus, machine=machine)
                                 except RuntimeError:
                                     pass  # Widget was deleted
+                            else:
+                                self.log_output.append(f'<span style="color:orange;">⚠️  Could not extract COR from output for {file_info["filename"]} (output length: {len(output)})</span>')
+
+                        # If this file is marked for sync auto-full, queue Full reconstruction now
+                        # Queue it regardless of whether COR was found (will use auto mode if no COR)
+                        if file_info.get('sync_auto_full', False):
+                            try:
+                                machine = file_info.get('sync_machine', 'Local')
+                                num_gpus = file_info.get('sync_num_gpus', 1)
+                                self.log_output.append(f'<span style="color:blue;">🔄 Auto-queuing Full reconstruction for {file_info["filename"]}</span>')
+                                # Remove the sync flag to avoid re-queuing
+                                file_info['sync_auto_full'] = False
+                                # Queue Full reconstruction
+                                self._run_batch_with_queue([file_info], recon_type='full', num_gpus=num_gpus, machine=machine)
+                            except RuntimeError:
+                                pass  # Widget was deleted
 
                     # Safely update status (widget may have been deleted if list was refreshed)
                     try:
@@ -4263,14 +4290,18 @@ class TomoGUI(QWidget):
             # Update known files
             self.sync_mode_known_files = current_files
 
+            # Get machine settings before refresh
+            machine = self.batch_machine_box.currentText()
+            num_gpus = self.batch_gpus_per_machine.value()
+
             # Refresh the batch file list to include new files
             self._refresh_batch_file_list()
 
-            # Process each new file: Try -> Full
+            # Process each new file: Try -> Full (after refresh so file_info is current)
             for file_path in sorted(new_files):
                 filename = os.path.basename(file_path)
 
-                # Find file_info in batch list
+                # Find file_info in batch list (AFTER refresh)
                 file_info = None
                 for f in self.batch_file_list:
                     if f['path'] == file_path:
@@ -4279,9 +4310,6 @@ class TomoGUI(QWidget):
 
                 if file_info:
                     self.log_output.append(f'<span style="color:green;">🚀 Auto-processing: {filename}</span>')
-                    # Add to queue: Try first, then Full will be queued after COR is found
-                    machine = self.batch_machine_box.currentText()
-                    num_gpus = self.batch_gpus_per_machine.value()
 
                     # Mark this file for auto-Full after Try completes
                     file_info['sync_auto_full'] = True
@@ -4306,10 +4334,20 @@ class TomoGUI(QWidget):
         # Look for patterns like "rotation axis: 1234.5" or "COR: 1234.5"
         # Common tomocupy output patterns for auto-detected COR
         patterns = [
+            # Standard patterns with colon or equals
             r'rotation\s*axis\s*[:=]\s*([0-9]+\.?[0-9]*)',
+            r'rotation-axis\s*[:=]\s*([0-9]+\.?[0-9]*)',
             r'COR\s*[:=]\s*([0-9]+\.?[0-9]*)',
             r'center\s*[:=]\s*([0-9]+\.?[0-9]*)',
-            r'rotation-axis\s*[:=]\s*([0-9]+\.?[0-9]*)',
+            # Patterns with "is" or "found"
+            r'rotation\s*axis\s+(?:is\s+)?([0-9]+\.?[0-9]*)',
+            r'COR\s+(?:is\s+|found\s+)?([0-9]+\.?[0-9]*)',
+            # Patterns in brackets or parentheses
+            r'rotation\s*axis\s*[\(\[]\s*([0-9]+\.?[0-9]*)\s*[\)\]]',
+            # Pattern for "auto" followed by value
+            r'auto.*?[:=]\s*([0-9]+\.?[0-9]*)',
+            # Generic "axis" patterns
+            r'axis\s*[:=]\s*([0-9]+\.?[0-9]*)',
         ]
 
         for pattern in patterns:
@@ -4317,7 +4355,9 @@ class TomoGUI(QWidget):
             if match:
                 try:
                     cor_value = float(match.group(1))
-                    return cor_value
+                    # Sanity check: COR should be a reasonable value (not 0 or negative, typically < 10000)
+                    if 0 < cor_value < 10000:
+                        return cor_value
                 except ValueError:
                     continue
 
@@ -4455,6 +4495,17 @@ class TomoGUI(QWidget):
         p.setProperty('file_info', file_info)
         p.setProperty('use_auto_cor', use_auto_cor)
         p.setProperty('recon_type', recon_type)
+
+        # Initialize output buffer to accumulate process output
+        p.setProperty('output_buffer', '')
+
+        # Connect to readyRead signal to accumulate output
+        def accumulate_output():
+            current_buffer = p.property('output_buffer') or ''
+            new_data = p.readAllStandardOutput().data().decode('utf-8', errors='ignore')
+            p.setProperty('output_buffer', current_buffer + new_data)
+
+        p.readyReadStandardOutput.connect(accumulate_output)
 
         # Set CUDA_VISIBLE_DEVICES for GPU assignment (only for local execution)
         if machine == "Local":
