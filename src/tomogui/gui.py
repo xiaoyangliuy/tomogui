@@ -1792,6 +1792,12 @@ class TomoGUI(QWidget):
         self.batch_queue_label = QLabel("Queue: 0 jobs waiting")
         machine_layout.addWidget(self.batch_queue_label)
 
+        machine_layout.addSpacing(20)
+        self.batch_sync_mode_checkbox = QCheckBox("Sync Mode (Auto-process new files)")
+        self.batch_sync_mode_checkbox.setToolTip("Automatically run Try + Full reconstruction on new files as they arrive")
+        self.batch_sync_mode_checkbox.stateChanged.connect(self._toggle_sync_mode)
+        machine_layout.addWidget(self.batch_sync_mode_checkbox)
+
         machine_layout.addStretch()
         main_layout.addLayout(machine_layout)
 
@@ -1850,6 +1856,11 @@ class TomoGUI(QWidget):
         self.batch_completed_jobs = 0  # Number of completed jobs
         self.batch_current_machine = "Local"  # Current machine for batch
         self.batch_current_num_gpus = 1  # Current number of GPUs
+
+        # Initialize sync mode state
+        self.sync_mode_active = False
+        self.sync_mode_timer = None
+        self.sync_mode_known_files = set()  # Track files we've already seen
 
 
     # ===== HELPER METHODS =====
@@ -4006,6 +4017,20 @@ class TomoGUI(QWidget):
                     exit_code = process.exitCode()
                     self.batch_completed_jobs += 1
 
+                    # Extract COR value if this was an auto COR job
+                    if exit_code == 0:
+                        use_auto_cor = process.property('use_auto_cor')
+                        if use_auto_cor and job_recon_type == 'try':
+                            # Read process output to extract COR
+                            output = process.readAllStandardOutput().data().decode('utf-8', errors='ignore')
+                            cor_value = self._extract_cor_from_output(output)
+                            if cor_value is not None:
+                                try:
+                                    file_info['cor_input'].setText(str(cor_value))
+                                    self.log_output.append(f'<span style="color:green;">🎯 Auto-detected COR for {file_info["filename"]}: {cor_value}</span>')
+                                except RuntimeError:
+                                    pass  # Widget was deleted
+
                     # Safely update status (widget may have been deleted if list was refreshed)
                     try:
                         if exit_code == 0:
@@ -4163,6 +4188,113 @@ class TomoGUI(QWidget):
             f"❌ Failed: {failed_count}"
         )
 
+    def _toggle_sync_mode(self, state):
+        """Toggle sync mode on/off"""
+        from PyQt5.QtCore import QTimer
+
+        if state == Qt.Checked:
+            # Enable sync mode
+            folder = self.data_path.text().strip()
+            if not folder or not os.path.isdir(folder):
+                QMessageBox.warning(self, "Warning", "Please select a valid data folder first.")
+                self.batch_sync_mode_checkbox.setChecked(False)
+                return
+
+            self.sync_mode_active = True
+            self.log_output.append(f'<span style="color:green;">🔄 Sync mode ENABLED - watching for new files in {folder}</span>')
+
+            # Initialize known files
+            self.sync_mode_known_files = set(glob.glob(os.path.join(folder, "*.h5")))
+
+            # Start timer to check for new files every 5 seconds
+            self.sync_mode_timer = QTimer()
+            self.sync_mode_timer.timeout.connect(self._check_for_new_files)
+            self.sync_mode_timer.start(5000)  # Check every 5 seconds
+        else:
+            # Disable sync mode
+            self.sync_mode_active = False
+            if self.sync_mode_timer:
+                self.sync_mode_timer.stop()
+                self.sync_mode_timer = None
+            self.log_output.append(f'<span style="color:orange;">⏸️  Sync mode DISABLED</span>')
+
+    def _check_for_new_files(self):
+        """Check for new .h5 files and automatically process them"""
+        folder = self.data_path.text().strip()
+        if not folder or not os.path.isdir(folder):
+            return
+
+        # Get current files
+        current_files = set(glob.glob(os.path.join(folder, "*.h5")))
+
+        # Find new files
+        new_files = current_files - self.sync_mode_known_files
+
+        if new_files:
+            self.log_output.append(f'<span style="color:blue;">📁 Detected {len(new_files)} new file(s)</span>')
+
+            # Update known files
+            self.sync_mode_known_files = current_files
+
+            # Refresh the batch file list to include new files
+            self._refresh_batch_file_list()
+
+            # Process each new file: Try -> Full
+            for file_path in sorted(new_files):
+                filename = os.path.basename(file_path)
+
+                # Find file_info in batch list
+                file_info = None
+                for f in self.batch_file_list:
+                    if f['path'] == file_path:
+                        file_info = f
+                        break
+
+                if file_info:
+                    self.log_output.append(f'<span style="color:green;">🚀 Auto-processing: {filename}</span>')
+                    # Add to queue: Try first, then Full
+                    machine = self.batch_machine_box.currentText()
+                    num_gpus = self.batch_gpus_per_machine.value()
+
+                    # Queue Try reconstruction first
+                    self._run_batch_with_queue([file_info], recon_type='try', num_gpus=num_gpus, machine=machine)
+
+                    # TODO: After try completes, extract COR and queue Full
+                    # For now, queue Full immediately (they'll run sequentially)
+                    self._run_batch_with_queue([file_info], recon_type='full', num_gpus=num_gpus, machine=machine)
+
+    def _extract_cor_from_output(self, output):
+        """
+        Extract the auto-detected COR value from tomocupy output
+
+        Args:
+            output: String containing the process output
+
+        Returns:
+            Float COR value if found, None otherwise
+        """
+        import re
+
+        # Look for patterns like "rotation axis: 1234.5" or "COR: 1234.5"
+        # Common tomocupy output patterns for auto-detected COR
+        patterns = [
+            r'rotation\s*axis\s*[:=]\s*([0-9]+\.?[0-9]*)',
+            r'COR\s*[:=]\s*([0-9]+\.?[0-9]*)',
+            r'center\s*[:=]\s*([0-9]+\.?[0-9]*)',
+            r'rotation-axis\s*[:=]\s*([0-9]+\.?[0-9]*)',
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, output, re.IGNORECASE)
+            if match:
+                try:
+                    cor_value = float(match.group(1))
+                    return cor_value
+                except ValueError:
+                    continue
+
+        return None
+
     def _batch_stop_queue(self):
         """Stop the batch queue and kill all running processes"""
         if not self.batch_running:
@@ -4226,30 +4358,36 @@ class TomoGUI(QWidget):
         # Get reconstruction parameters from Main tab
         recon_way = self.recon_way_box.currentText()
 
-        # Get COR value EXCLUSIVELY from batch table (not from Main tab)
+        # Get COR value from batch table or use auto mode
         cor_val = file_info['cor_input'].text().strip()
+        cor_method = self.cor_method_box.currentText()  # Get from main tab
 
-        # Batch tab always uses manual COR with the value from the batch table
-        # Validate COR - batch tab requires COR value to be set
+        # Determine COR mode: use batch value if set, otherwise use main tab mode
+        use_auto_cor = False
         if not cor_val:
-            self.log_output.append(f'<span style="color:orange;">⚠️  No COR value in batch table for {filename}, skipping</span>')
-            # Return a dummy finished process
-            p = QProcess(self)
-            p.start("echo", ["skipped"])
-            p.waitForFinished()
-            return p
-
-        try:
-            cor = float(cor_val)
-        except ValueError:
-            self.log_output.append(f'<span style="color:red;">❌ Invalid COR value "{cor_val}" for {filename}, skipping</span>')
-            p = QProcess(self)
-            p.start("echo", ["skipped"])
-            p.waitForFinished()
-            return p
+            # No COR in batch table - check main tab mode
+            if cor_method == "auto":
+                use_auto_cor = True
+                self.log_output.append(f'<span style="color:blue;">🔍 No COR in batch table for {filename}, using AUTO mode</span>')
+            else:
+                self.log_output.append(f'<span style="color:orange;">⚠️  No COR value in batch table for {filename}, skipping</span>')
+                # Return a dummy finished process
+                p = QProcess(self)
+                p.start("echo", ["skipped"])
+                p.waitForFinished()
+                return p
+        else:
+            # COR value provided in batch table
+            try:
+                cor = float(cor_val)
+            except ValueError:
+                self.log_output.append(f'<span style="color:red;">❌ Invalid COR value "{cor_val}" for {filename}, skipping</span>')
+                p = QProcess(self)
+                p.start("echo", ["skipped"])
+                p.waitForFinished()
+                return p
 
         # Build command
-        # Batch tab ALWAYS uses manual COR with the value from the batch table
         if self.use_conf_box.isChecked():
             config_editor = self.config_editor_try if recon_type == 'try' else self.config_editor_full
             config_text = config_editor.toPlainText()
@@ -4261,22 +4399,34 @@ class TomoGUI(QWidget):
             cmd = ["tomocupy", str(recon_way),
                    "--reconstruction-type", recon_type,
                    "--config", temp_conf,
-                   "--file-name", file_path,
-                   "--rotation-axis-auto", "manual",
-                   "--rotation-axis", str(cor)]
+                   "--file-name", file_path]
+
+            if use_auto_cor:
+                cmd += ["--rotation-axis-auto", "auto"]
+            else:
+                cmd += ["--rotation-axis-auto", "manual", "--rotation-axis", str(cor)]
         else:
             cmd = ["tomocupy", str(recon_way),
                    "--reconstruction-type", recon_type,
-                   "--file-name", file_path,
-                   "--rotation-axis-auto", "manual",
-                   "--rotation-axis", str(cor)]
+                   "--file-name", file_path]
+
+            if use_auto_cor:
+                cmd += ["--rotation-axis-auto", "auto"]
+            else:
+                cmd += ["--rotation-axis-auto", "manual", "--rotation-axis", str(cor)]
 
         # Wrap for remote execution if needed
         cmd = self._get_batch_machine_command(cmd, machine)
 
         # Create and configure process
         p = QProcess(self)
-        p.setProcessChannelMode(QProcess.ForwardedChannels)
+        # Capture output to extract COR value if using auto mode
+        p.setProcessChannelMode(QProcess.MergedChannels)
+
+        # Store metadata for COR extraction
+        p.setProperty('file_info', file_info)
+        p.setProperty('use_auto_cor', use_auto_cor)
+        p.setProperty('recon_type', recon_type)
 
         # Set CUDA_VISIBLE_DEVICES for GPU assignment (only for local execution)
         if machine == "Local":
