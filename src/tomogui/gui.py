@@ -2120,15 +2120,18 @@ class TomoGUI(QWidget):
             # Determine row color based on reconstruction status
             if has_full:
                 row_color = "green"  # Full reconstruction exists
+                status_item = QTableWidgetItem("Done full")
             elif has_try:
                 row_color = "orange"  # Only try reconstruction exists
+                status_item = QTableWidgetItem("Done try")
             else:
                 row_color = "red"  # No reconstruction
+                status_item = QTableWidgetItem("Ready")
             # Store file info
             file_info = {
                 'path': f,
                 'filename': filename,
-                'status': 'Ready',
+                'status': status_item,
                 'row': row,
                 'recon_status': row_color
             }
@@ -2159,9 +2162,8 @@ class TomoGUI(QWidget):
             file_info['cor_input'] = cor_input
 
             # Status
-            status_item = QTableWidgetItem('Ready')
             self.batch_file_main_table.setItem(row, 3, status_item)
-            file_info['status_item'] = status_item
+            file_info['status'] = status_item
 
             # File size
             try:
@@ -2520,7 +2522,8 @@ class TomoGUI(QWidget):
         checkbox_widget = self.batch_file_main_table.cellWidget(row, 0)
         if checkbox_widget:
             checkbox_widget.setStyleSheet(f"QWidget {{ border-left: 6px solid {color}; }}")
-        self.batch_file_main_list[row]['status'].setText(status)
+        self.batch_file_main_table.setItem(row, 3, status)
+        self.batch_file_main_list[row]['status'] = status
 
 
     def try_reconstruction(self):
@@ -2587,7 +2590,7 @@ class TomoGUI(QWidget):
         code = self.run_command_live(cmd, proj_file=proj_file, job_label="Try recon", wait=True, cuda_devices=gpu)
         try:
             if code == 0:
-                self._update_row(row=self.highlight_row,color='yellow',status='done try') #chante table content and self.batch_file_list
+                self._update_row(row=self.highlight_row,color='orange',status='done try') #chante table content and self.batch_file_list
                 self.log_output.append(f'<span style="color:green;">\u2705 Done try recon {proj_file}</span>')
             else:
                 self.log_output.append(f'<span style="color:red;">\u274c Try recon {proj_file} failed</span>')
