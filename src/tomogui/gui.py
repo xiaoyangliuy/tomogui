@@ -60,6 +60,7 @@ class TomoGUI(QWidget):
         self.batch_running = False
         self.batch_file_list = []
         self.highlight_scan = None
+        self._current_source_file = None
 
         # Batch selection state for shift-click
         self.batch_last_clicked_row = None
@@ -156,7 +157,7 @@ class TomoGUI(QWidget):
         single_ops.addWidget(try_btn)
         view_try_btn = QPushButton("  View Try  ")
         view_try_btn.setStyleSheet("QPushButton { font-size: 10.5pt; }")
-        view_try_btn.clicked.connect(self.view_try_reconstruction)
+        view_try_btn.clicked.connect(self.view_try_reconstruction) 
         single_ops.addWidget(view_try_btn)
         single_ops.setStretch(0,0)
         separator = QLabel(" | ")
@@ -242,7 +243,7 @@ class TomoGUI(QWidget):
         others_ops.setSpacing(5)
         view_prj_btn = QPushButton("View raw")
         view_prj_btn.setStyleSheet("QPushButton { font-size: 10.5pt; }")
-        view_prj_btn.clicked.connect(self.view_raw) #TODO: needs to modify function to make the value show in table
+        view_prj_btn.clicked.connect(self.view_raw) 
         others_ops.addWidget(view_prj_btn)
         view_meta_btn = QPushButton("meta")
         view_meta_btn.setStyleSheet("QPushButton { font-size: 10.5pt; }")
@@ -2510,7 +2511,7 @@ class TomoGUI(QWidget):
     # ===== RECONSTRUCTION METHODS =====
 
     def try_reconstruction(self):
-        proj_file = self.highlight_scan #the scan highlighted in main table
+        proj_file = self.highlight_scan #the scan highlighted in main table full path
         if not proj_file:
             self.log_output.append(f"\u274c No file")
             return
@@ -2574,6 +2575,9 @@ class TomoGUI(QWidget):
         try:
             if code == 0:
                 self.log_output.append(f'<span style="color:green;">\u2705 Done try recon {proj_file}</span>')
+                rc = "orange"  # Default to orange (try done)
+                self.batch_file_main_list
+                self.checkbox_widget.setStyleSheet(f"QWidget {{ border-left: 6px solid {rc}; }}")
             else:
                 self.log_output.append(f'<span style="color:red;">\u274c Try recon {proj_file} failed</span>')
         finally:
@@ -2794,21 +2798,18 @@ class TomoGUI(QWidget):
     # ===== COR MANAGEMENT =====
     def record_cor_to_json(self):
         data_folder = self.data_path.text().strip()
-        cor_value = self.cor_input_full.text().strip()
-        proj_file = self.proj_file_box.currentData()
-
-        if not (data_folder and cor_value and proj_file):
-            self.log_output.append(f'<span style="color:red;">\u26a0\ufe0fMissing data folder, COR, or projection file</span>')
+        proj_file = self._current_source_file
+        cur_cor_tiff = self._current_img_path
+        if not (proj_file and cur_cor_tiff):
+            self.log_output.append(f'<span style="color:red;">\u26a0\ufe0fMissing try data folder or projection file</span>')
             return
-
+        cor_nm = os.path.basename(self._current_img_path)
         try:
-            cor_value = float(cor_value)
-        except ValueError:
-            self.log_output.append(f'<span style="color:red;">\u274c[ERROR] COR value is not a valid number</span>')
+            cor_value = cor_nm.split("center")[1].split(".tiff")[0]
+        except IndexError:
+            self.log_output('<span style="color:red;">\u274c[ERROR] Value not found in expected format, cannot add COR</span>')
             return
-
         json_path = os.path.join(data_folder, "rot_cen.json")
-
         if os.path.exists(json_path):
             with open(json_path, "r") as f:
                 try:
@@ -2831,27 +2832,7 @@ class TomoGUI(QWidget):
             if result != QMessageBox.Yes:
                 self.log_output.append("\u26a0\ufe0fNot take COR")
                 return
-        # check if recon folder exists and add comment to cor_log               
-        proj_name = os.path.splitext(os.path.basename(proj_file))[0]
-        full_dir = os.path.join(f"{data_folder}_rec", f"{proj_name}_rec")
-        num_recon = len(glob.glob(f'{full_dir}/*.tiff'))
-        raw_prj = proj_file  # fixed: currentData() already carries the full path
-        try:
-            self._raw_h5 = h5py.File(raw_prj, "r")
-        except Exception as e:
-            self.log_output.append(f'<span style="color:red;">\u274c Failed to open H5: {e}</span>')
-            return
-        self.raw_files_y = self._raw_h5['/exchange/data'].shape[1] # y in prj, z in recon
-        self._raw_h5.close()
-
-        if os.path.exists(full_dir) is True and num_recon == self.raw_files_y:
-            status = "full_rec"
-        elif os.path.exists(full_dir) is True and num_recon < self.raw_files_y:
-            status = "part_rec"
-        elif os.path.exists(full_dir) is False:
-            status = "no_rec"
-        
-        self.cor_data[proj_file] = (cor_value, status)
+        self.cor_data[proj_file] = (cor_value)
         try:
             with open(json_path, "w") as f:
                 json.dump(self.cor_data, f, indent=2)
@@ -2859,7 +2840,6 @@ class TomoGUI(QWidget):
         except Exception as e:
             self.log_output.append(f'<span style="color:red;">\u274cFailed to save rot_cen.json: {e}</span>')
             return
-
         self.cor_json_output.clear()
         for k, (v1,v2) in self.cor_data.items():
             base = os.path.splitext(os.path.basename(k))[0]
@@ -2934,7 +2914,7 @@ class TomoGUI(QWidget):
     # ===== IMAGE VIEWING =====
     def view_raw(self):
         "use h5py read, assume same structure for aps IMG"
-        proj_file = self.proj_file_box.currentData()
+        proj_file = self.highlight_scan #the scan highlighted in main table full path
         if not proj_file:
             self.log_output.append("\u274c No file selected")
             return
@@ -2966,9 +2946,10 @@ class TomoGUI(QWidget):
 
     def view_try_reconstruction(self):
         data_folder = self.data_path.text().strip()
-        proj_file = self.proj_file_box.currentData()
+        proj_file = self.highlight_scan #the scan highlighted in main table full path
         proj_name = os.path.splitext(os.path.basename(proj_file))[0]
         try_dir = os.path.join(f"{data_folder}_rec", "try_center", proj_name)
+        self.preview_files = [] #clean it before use
         self.preview_files = sorted(glob.glob(os.path.join(try_dir, "*.tiff")))
         if not self.preview_files:
             self.log_output.append(f'<span style="color:red;">\u274cNo try folder</span>')
@@ -2986,7 +2967,7 @@ class TomoGUI(QWidget):
         # Store the source filename for display
         self._current_source_file = os.path.basename(proj_file)
         self._current_view_mode = "try"
-        self.update_try_slice()
+        self.update_try_slice()  
 
     def view_full_reconstruction(self):
         data_folder = self.data_path.text().strip()
@@ -3200,6 +3181,8 @@ class TomoGUI(QWidget):
         idx = self.slice_slider.value()
         if 0 <= idx < len(self.preview_files):
             self.show_image(self.preview_files[idx], flag=None)
+        return self.preview_files[idx] #find the current cor path
+        
 
     def update_full_slice(self):
         self._keep_zoom = True
