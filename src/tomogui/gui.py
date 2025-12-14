@@ -2523,7 +2523,7 @@ class TomoGUI(QWidget):
         if checkbox_widget:
             checkbox_widget.setStyleSheet(f"QWidget {{ border-left: 6px solid {color}; }}")
         status_item = QTableWidgetItem(status)
-        self.batch_file_main_table.setItem(row, 3, status)
+        self.batch_file_main_table.setItem(row, 3, status_item)
         self.batch_file_main_list[row]['status'] = status
 
 
