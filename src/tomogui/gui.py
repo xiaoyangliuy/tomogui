@@ -62,6 +62,7 @@ class TomoGUI(QWidget):
         self.highlight_scan = None
         self.highlight_row = None
         self._current_source_file = None
+        self.cor_path = None
 
         # Batch selection state for shift-click
         self.batch_last_clicked_row = None
@@ -2815,12 +2816,16 @@ class TomoGUI(QWidget):
     # ===== COR MANAGEMENT =====
     def record_cor_to_json(self):
         data_folder = self.data_path.text().strip()
-        proj_file = self._current_source_file
-        cur_cor_tiff = self._current_img_path
-        if not (proj_file and cur_cor_tiff):
+        proj_file = self.highlight_scan
+        print(proj_file)
+        row = self.highlight_row
+        idx = self.slice_slider.value()
+        cor_file = self.preview_files[idx]
+        print(cor_file)
+        if not os.path.exists(proj_file) or not os.path.exists(cor_file):
             self.log_output.append(f'<span style="color:red;">\u26a0\ufe0fMissing try data folder or projection file</span>')
             return
-        cor_nm = os.path.basename(self._current_img_path)
+        cor_nm = os.path.basename(cor_file)
         try:
             cor_value = cor_nm.split("center")[1].split(".tiff")[0]
         except IndexError:
@@ -2854,14 +2859,14 @@ class TomoGUI(QWidget):
             with open(json_path, "w") as f:
                 json.dump(self.cor_data, f, indent=2)
             self.log_output.append(f"\u2705[INFO] COR saved for: {proj_file}")
+            cor_value_item = QLineEdit(cor_value)
+            cor_value_item.setAlignment(Qt.AlignCenter)
+            cor_value_item.setFixedWidth(80)
+            self.batch_file_main_table.setCellWidget(row, 2, cor_value_item)
+            self.batch_file_main_list[row]['cor_input'] = cor_value
         except Exception as e:
             self.log_output.append(f'<span style="color:red;">\u274cFailed to save rot_cen.json: {e}</span>')
             return
-        self.cor_json_output.clear()
-        for k, (v1,v2) in self.cor_data.items():
-            base = os.path.splitext(os.path.basename(k))[0]
-            last4 = base[-4:] #for 7bm
-            self.cor_json_output.append(f"{last4} : {v1} {v2}")
 
     def load_cor_to_jsonbox(self):
         data_folder = self.data_path.text().strip()
@@ -3198,7 +3203,7 @@ class TomoGUI(QWidget):
         idx = self.slice_slider.value()
         if 0 <= idx < len(self.preview_files):
             self.show_image(self.preview_files[idx], flag=None)
-        return self.preview_files[idx] #find the current cor path
+        
         
 
     def update_full_slice(self):
