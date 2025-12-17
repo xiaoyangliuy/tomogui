@@ -199,10 +199,9 @@ class TomoGUI(QWidget):
         self.cor_full_method.addItems(["auto","manual"])
         self.cor_full_method.setCurrentIndex(1) # make manual as default
         single_full_ops.addWidget(self.cor_full_method)
-        #TODO: link to the the COR shown in right side figure
         rec_cor_btn = QPushButton("  Add COR  ")
         rec_cor_btn.setStyleSheet("QPushButton { font-size: 10.5pt; }")
-        rec_cor_btn.clicked.connect(self.record_cor_to_json)#TODO: needs to modify function to make the value show in table
+        rec_cor_btn.clicked.connect(self.record_cor_main_tb)
         single_full_ops.addWidget(rec_cor_btn)
         cuda_full_label = QLabel("cuda")
         cuda_full_label.setStyleSheet("QLabel { font-size: 10.5pt; }")
@@ -332,7 +331,7 @@ class TomoGUI(QWidget):
         load_cor_btn = QPushButton("Load COR")
         load_cor_btn.setStyleSheet("QPushButton { font-size: 10.5pt; }")
         load_cor_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        #load_cor_btn.clicked.connect(self.load_cor_to_jsonbox_batch)#TODO: needs to modify to work with table
+        load_cor_btn.clicked.connect(self.load_cor)
         batch_ops.addWidget(load_cor_btn)
         select_all_btn = QPushButton(" Select all ")
         select_all_btn.setStyleSheet("QPushButton { font-size: 10.5pt; }")
@@ -2594,7 +2593,7 @@ class TomoGUI(QWidget):
         code = self.run_command_live(cmd, proj_file=proj_file, job_label="Try recon", wait=True, cuda_devices=gpu)
         try:
             if code == 0:
-                self._update_row(row=self.highlight_row,color='orange',status='done try') #chante table content and self.batch_file_list
+                self._update_row(row=self.highlight_row,color='orange',status='done try') #change table content and self.batch_file_list
                 self.log_output.append(f'<span style="color:green;">\u2705 Done try recon {proj_file}</span>')
             else:
                 self.log_output.append(f'<span style="color:red;">\u274c Try recon {proj_file} failed</span>')
@@ -2814,14 +2813,15 @@ class TomoGUI(QWidget):
             self.log_output.append(f"\u2705Done batch full, check summary: {str(summary)}")
 
     # ===== COR MANAGEMENT =====
-    def record_cor_to_json(self):
+    def record_cor_main_tb(self):
+        '''
+        link to Add COR function: get cor from current viewing image, save to csv file and update main table
+        '''
         data_folder = self.data_path.text().strip()
         proj_file = self.highlight_scan
-        print(proj_file)
         row = self.highlight_row
         idx = self.slice_slider.value()
         cor_file = self.preview_files[idx]
-        print(cor_file)
         if not os.path.exists(proj_file) or not os.path.exists(cor_file):
             self.log_output.append(f'<span style="color:red;">\u26a0\ufe0fMissing try data folder or projection file</span>')
             return
@@ -2854,12 +2854,12 @@ class TomoGUI(QWidget):
             if result != QMessageBox.Yes:
                 self.log_output.append("\u26a0\ufe0fNot take COR")
                 return
-        self.cor_data[proj_file] = (cor_value)
+        self.cor_data[proj_file] = (cor_value,"Done try")
         try:
             with open(json_path, "w") as f:
                 json.dump(self.cor_data, f, indent=2)
             self.log_output.append(f"\u2705[INFO] COR saved for: {proj_file}")
-            cor_value_item = QLineEdit(cor_value)
+            cor_value_item = QLineEdit(cor_value) # add cor value
             cor_value_item.setAlignment(Qt.AlignCenter)
             cor_value_item.setFixedWidth(80)
             self.batch_file_main_table.setCellWidget(row, 2, cor_value_item)
@@ -2867,11 +2867,10 @@ class TomoGUI(QWidget):
         except Exception as e:
             self.log_output.append(f'<span style="color:red;">\u274cFailed to save rot_cen.json: {e}</span>')
             return
-
-    def load_cor_to_jsonbox(self):
+        
+    def load_cor(self):
         data_folder = self.data_path.text().strip()
         json_path = os.path.join(data_folder, "rot_cen.json")
-
         if not os.path.exists(json_path):
             self.log_output.append("\u26a0\ufe0f[WARNING] no rot_cen.json, create one")
             with open(json_path, "w") as f:
@@ -2879,59 +2878,47 @@ class TomoGUI(QWidget):
             return
         try:
             with open(json_path, "r") as f:
-                self.cor_data = json.load(f)
-            self.cor_json_output.clear()
-            for k, (v1, v2) in self.cor_data.items():
-                base = os.path.splitext(os.path.basename(k))[0]
-                last4 = base[-4:] #for 7bm
-                self.cor_json_output.append(f"{last4} : {v1} {v2}")
-            self.log_output.append("\u2705[INFO] COR log reloaded.")
+                json_data = json.load(f) 
         except Exception as e:
-            self.log_output.append(f"\u274c[ERROR] Failed to load COR log: {e}")
-            return
-        
-    def refresh_cor_json(self):
-        data_folder = self.data_path.text().strip()
-        self.refresh_json_btn.setEnabled(False)
-        json_path = os.path.join(data_folder, "rot_cen.json")
-        if not os.path.exists(json_path):
-            self.log_output.append("\u274c[ERROR] no rot_cen.json")
-            self.refresh_json_btn.setEnabled(True)
-            return
+            self.log_output.append(f'<span style="color:red;"> Failed to read JSON: {e}</span>')
+        fn_to_row = {}
+        for r in range(self.batch_file_main_table.rowCount()):
+            it = self.batch_file_main_table.item(r,1)
+            if it:
+                fn_to_row[it.text().strip()] = r
+        self.batch_file_main_table.setSortingEnabled(False)
+        self.batch_file_main_table.blockSignals(True)  
         try:
-            with open(json_path, "r") as f:
-                self.cor_data = json.load(f)
-            self.cor_json_output.clear()
-            for k, (v1, v2) in self.cor_data.items():
-                base = os.path.splitext(os.path.basename(k))[0]
-                rec_f = f"{data_folder}_rec/{base}_rec"
-                if os.path.exists(rec_f) is False:
-                    v2 = "no_rec"
-                else:
-                    num_recon = len(glob.glob(f'{rec_f}/*.tiff'))
-                    prj = h5py.File(k, "r")
-                    num_prj = prj['/exchange/data'].shape[1] # y in prj, z in recon
-                    prj.close()
-                    if num_recon == num_prj:
-                        v2 = "full_rec"
-                    elif num_recon < num_prj:
-                        v2 = "part_rec"
-                self.cor_data[k] = (v1, v2)
-                last4 = base[-4:] #for 7bm
-                self.cor_json_output.append(f"{last4} : {v1} {v2}")
-            try:
-                with open(json_path, "w") as f:
-                    json.dump(self.cor_data, f, indent=2)
-                self.log_output.append(f"\u2705[INFO] COR refreshed")
-                self.refresh_json_btn.setEnabled(True)
-            except Exception as e:
-                self.refresh_cor_json_btn.setEnabled(True)
-                self.log_output.append(f'<span style="color:red;">\u274cFailed to save new rot_cen.json: {e}</span>')
-                return
-        except Exception as e:
-            self.log_output.append(f'<span style="color:red;">\u274cFailed to refresh rot_cen.json: {e}</span>')
-            self.refresh_json_btn.setEnabled(True)
-            return
+            for k, (v1,v2) in json_data.items():
+                base = os.path.basename(k)
+                row = fn_to_row.get(base,None)
+                cor_widget = self.batch_file_main_table.cellWidget(row, 2)
+                if isinstance(cor_widget, QLineEdit):
+                    cor_widget.setText(str(v1))
+                status_item = self.batch_file_main_table.item(row, 3)
+                if status_item is None:
+                    status_item = QTableWidgetItem()
+                    self.batch_file_main_table.setItem(row, 3, status_item)
+                status_item.setText(str(v2))
+                checkbox_widget = self.batch_file_main_table.cellWidget(row, 0)
+                if checkbox_widget:
+                    if "Done full" in v2:
+                        checkbox_widget.setStyleSheet(
+                            f"QWidget {{ border-left: 6px solid green; }}"
+                            )
+                    elif "Done try" in v2:
+                        checkbox_widget.setStyleSheet(
+                            f"QWidget {{ border-left: 6px solid red; }}"
+                            )
+                if hasattr(self, "batch_file_main_list") and row < len(self.batch_file_main_list):
+                    if "Done full" in v2:
+                        self.batch_file_main_list[row]["recon_status"] = 'green'
+                    elif "Done try" in v2:
+                        self.batch_file_main_list[row]["recon_status"] = 'orange'
+                        self.batch_file_main_list[row]["status"] = status_item
+        finally:
+                self.batch_file_main_table.blockSignals(False)
+        self.log_output.append(f'<span style="color:green;">JSON loaded</span>')
 
     # ===== IMAGE VIEWING =====
     def view_raw(self):
