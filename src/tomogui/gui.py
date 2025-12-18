@@ -2116,12 +2116,12 @@ class TomoGUI(QWidget):
             full_dir = os.path.join(f"{table_folder}_rec", f"{proj_name}_rec")
             has_try = os.path.isdir(try_dir) and len(glob.glob(os.path.join(try_dir, "*.tiff"))) > 0
             has_full = os.path.isdir(full_dir) and len(glob.glob(os.path.join(full_dir, "*.tiff"))) > 0
-            fp = glob.glob(os.path.join(full_dir, "*.tiff"))
-            num_1 = int(Path(fp[0]).stem.split("_")[-1])
-            num_2 = int(Path(fp[-1]).stem.split("_")[-1])
             # Determine row color based on reconstruction status
             if has_full:
                 row_color = "green"  # Full reconstruction exists
+                fp = glob.glob(os.path.join(full_dir, "*.tiff"))
+                num_1 = int(Path(fp[0]).stem.split("_")[-1])
+                num_2 = int(Path(fp[-1]).stem.split("_")[-1])
                 status_item = QTableWidgetItem(f"Full {num_1}-{num_2}")
             elif has_try:
                 row_color = "orange"  # Only try reconstruction exists
@@ -2609,14 +2609,16 @@ class TomoGUI(QWidget):
                     self.log_output.append(f'<span style="color:red;">\u26a0\ufe0f Could not remove {temp_try}: {e}</span>')
 
     def full_reconstruction(self):
-        proj_file = self.proj_file_box.currentData()
-        recon_way = self.recon_way_box_full.currentText()  # fixed (was currentData)
+        proj_file = self.highlight_scan
+        pn = os.path.basename(proj_file)
+        recon_way = self.recon_way_box_full.currentText()  
+        highlight_row = self.highlight_row
         try:
-            cor_value = float(self.cor_input_full.text())
+            cor_value = float(self.batch_file_main_list[highlight_row]['cor_input'].text().strip())
         except ValueError:
             self.log_output.append(f'<span style="color:red;">\u274c[ERROR] Invalid Full COR value</span>')
             return
-        gpu = self.cuda_box_full.currentText().strip()
+        gpu = str(self.cuda_full_box.value())
         if self.use_conf_box.isChecked():
             self.log_output.append("\u26a0\ufe0f You are using config file, only recon type, filename, rot axis from GUI")
             config_text = self.config_editor_full.toPlainText()
@@ -2651,7 +2653,13 @@ class TomoGUI(QWidget):
         code = self.run_command_live(cmd, proj_file=proj_file, job_label="Full recon", wait=True, cuda_devices=gpu)
         try:
             if code == 0:
+                fullpath = os.path.join(f"{self.data_path}_rec", f"{pn}_rec")
+                full_files = glob.glob(os.path.join(fullpath, "*.tiff"))
+                num_1 = int(Path(full_files[0]).stem.split("_")[-1])
+                num_2 = int(Path(full_files[-1]).stem.split("_")[-1])
+                self._update_row(row=highlight_row,color='green',status=f'Full {num_1}-{num_2}') #change table content and self.batch_file_list
                 self.log_output.append(f'<span style="color:green;">\u2705 Done full recon {proj_file}</span>')
+                del fullpath, full_files, num_1, num_2, pn
             else:
                 self.log_output.append(f'<span style="color:red;">\u274c Full recon {proj_file} failed</span>')
         finally:
@@ -2662,7 +2670,6 @@ class TomoGUI(QWidget):
                         self.log_output.append(f"\U0001f9f9 Removed {temp_full}")
                 except Exception as e:
                     self.log_output.append(f'<span style="color:red;">\u26a0\ufe0f Could not remove {temp_full}: {e}</span>')
-        self.view_btn.setEnabled(True)
 
     #=============Batch OPERATIONS==================
     def _batch_select_all(self):
@@ -2947,7 +2954,7 @@ class TomoGUI(QWidget):
                             )
                     elif "Done try" in v2:
                         checkbox_widget.setStyleSheet(
-                            f"QWidget {{ border-left: 6px solid red; }}"
+                            f"QWidget {{ border-left: 6px solid orange; }}"
                             )
                 if hasattr(self, "batch_file_main_list") and row < len(self.batch_file_main_list):
                     if "Done full" in v2:
