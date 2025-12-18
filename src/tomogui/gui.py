@@ -331,6 +331,7 @@ class TomoGUI(QWidget):
         load_cor_btn = QPushButton("Load COR")
         load_cor_btn.setStyleSheet("QPushButton { font-size: 10.5pt; }")
         load_cor_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        load_cor_btn.setToolTip(f"Load rot_cen.json file, only use before batch process")
         load_cor_btn.clicked.connect(self.load_cor)
         batch_ops.addWidget(load_cor_btn)
         select_all_btn = QPushButton(" Select all ")
