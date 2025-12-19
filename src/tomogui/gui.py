@@ -27,6 +27,7 @@ from datetime import datetime
 
 from .theme_manager import ThemeManager
 from .hdf5_viewer import HDF5ImageDividerDialog
+from .batch_progress_window import ProgressWindow
 
 # Load matplotlib style from package resources
 matplotlib.rcdefaults()
@@ -47,6 +48,9 @@ class TomoGUI(QWidget):
         # Initialize theme manager (will apply theme after UI is built)
         self.theme_manager = ThemeManager()
         self.theme_manager.register_callback(self._on_theme_changed)
+
+        #initialize progress bar for batch process
+        self.progress_window = ProgressWindow(self)
 
         # State
         self.default_cmap = "gray"
@@ -236,10 +240,6 @@ class TomoGUI(QWidget):
         # Row 3: some helpful functions
         others_ops = QHBoxLayout()
         others_ops.setSpacing(5)
-        #view_prj_btn = QPushButton("View raw")
-        #view_prj_btn.setStyleSheet("QPushButton { font-size: 10.5pt; }")
-        #view_prj_btn.clicked.connect(self.view_raw) 
-        #others_ops.addWidget(view_prj_btn)
         view_meta_btn = QPushButton("raw/meta")
         view_meta_btn.setStyleSheet("QPushButton { font-size: 10.5pt; }")
         view_meta_btn.clicked.connect(lambda checked=False: self._batch_view_data(self.highlight_scan)) #TODO: needs to modify with alrady have functions in Batch Processing tab
@@ -298,9 +298,9 @@ class TomoGUI(QWidget):
         batch_label = QLabel("Batch process")
         batch_label.setStyleSheet("QLabel { font-size: 10.5pt; font-weight:bold; }")
         batch_ops.addWidget(batch_label)
-        batch_mach = QLabel("machine")
-        batch_mach.setStyleSheet("QLabel { font-size: 10.5pt; }")
-        batch_ops.addWidget(batch_mach)
+        batch_mach_label = QLabel("machine")
+        batch_mach_label.setStyleSheet("QLabel { font-size: 10.5pt; }")
+        batch_ops.addWidget(batch_mach_label)
         self.batch_machine_box = QComboBox()
         self.batch_machine_box.addItems(["Local", "tomo1", "tomo2", "tomo3", "tomo4", "tomo5"])
         self.batch_machine_box.setStyleSheet("QComboBox { font-size: 10.5pt; }")
@@ -340,7 +340,7 @@ class TomoGUI(QWidget):
         batch_recon_btn =QPushButton("Batch Try")
         batch_recon_btn.setStyleSheet("QPushButton { font-size: 10.5pt; }")
         batch_recon_btn.setToolTip("Run batch try reconstruction on selected files,the params are from GUI and COR guess from value put on single operation above")
-        batch_recon_btn.clicked.connect(self.batch_try_reconstruction) #TODO: needs to modify to work with table
+        batch_recon_btn.clicked.connect(self._batch_run_try_selected) #TODO: needs to modify to work with table
         batch_ops.addWidget(batch_recon_btn)
         batch_full_btn =QPushButton("Batch Full")
         batch_full_btn.setStyleSheet("QPushButton { font-size: 10.5pt; }")
@@ -2104,13 +2104,13 @@ class TomoGUI(QWidget):
                 try:
                     self.cor_data = json.load(f)
                     fns = list(self.cor_data.keys())
-                    self.log_output('Get cors from rot_cen.json')
-                except json.JSONDecondeError:
-                    self.log_output(f'<span style="color:red;">Error load rot.cen.json, stop</span>')
+                    self.log_output.append('Get cors from rot_cen.json')
+                except json.JSONDecodeError:
+                    self.log_output.append(f'<span style="color:red;">Error load rot.cen.json, stop</span>')
                     return
         else:
             fns = []
-            self.log_output(f'No rot.cen.json')
+            self.log_output.append(f'No rot.cen.json')
         #populate table
         for f in h5_files:
             filename = os.path.basename(f)
@@ -4057,7 +4057,7 @@ class TomoGUI(QWidget):
 
     def _batch_run_try_selected(self):
         """Run try reconstruction on all selected files with GPU queue management"""
-        selected_files = [f for f in self.batch_file_list if f['checkbox'].isChecked()]
+        selected_files = [f for f in self.batch_file_main_list if f['checkbox'].isChecked()]
         machine = self.batch_machine_box.currentText()
 
         if not selected_files:
@@ -4081,7 +4081,7 @@ class TomoGUI(QWidget):
 
     def _batch_run_full_selected(self):
         """Run full reconstruction on all selected files with GPU queue management"""
-        selected_files = [f for f in self.batch_file_list if f['checkbox'].isChecked()]
+        selected_files = [f for f in self.batch_main_file_list if f['checkbox'].isChecked()]
         machine = self.batch_machine_box.currentText()
 
         if not selected_files:
@@ -4103,6 +4103,32 @@ class TomoGUI(QWidget):
 
         self._run_batch_with_queue(selected_files, recon_type='full', num_gpus=num_gpus, machine=machine)
 
+  #=========helper to update table based on filename========================
+    def _find_row_by_filename(self, filename, filename_col=1):
+        table = self.batch_file_main_table
+        for row in range(table.rowCount()):
+            it = table.item(row, filename_col)
+            if it and it.text() == filename:
+                return row
+        return None
+
+    def _set_status_by_filename(self, filename, text, status_col=3, filename_col=1, color=None):
+        table = self.batch_file_main_table
+        row = self._find_row_by_filename(filename, filename_col=filename_col)
+        if row is None:
+            return False  # not found (maybe list refreshed)
+
+        item = table.item(row, status_col)
+        if item is None:
+            item = QTableWidgetItem()
+            item.setFlags(item.flags() & ~Qt.ItemIsEditable)  # optional
+            table.setItem(row, status_col, item)
+
+        item.setText(text)
+        if color is not None:
+            item.setBackground(QColor(color))
+        return True
+
     def _run_batch_with_queue(self, selected_files, recon_type, num_gpus, machine):
         """
         Run batch reconstructions with GPU queue management
@@ -4119,7 +4145,7 @@ class TomoGUI(QWidget):
         # Mark all jobs as queued (safely handle deleted widgets)
         for f, _, _ in jobs_to_add:
             try:
-                f['status_item'].setText('Queued')
+                self._set_status_by_filename(f["filename"], "Queued", color="lightgray")
             except RuntimeError:
                 # Widget was deleted, skip status update
                 pass
@@ -4148,7 +4174,10 @@ class TomoGUI(QWidget):
         self.batch_progress_bar.setValue(0)
         self.log_output.append(f'<span style="color:green;">🔧 Queue started with {num_gpus} GPU(s): {self.batch_available_gpus}</span>')
         QApplication.processEvents()
-
+        
+        self.progress_window.show()
+        self.progress_window.start_progress()
+        print(self.batch_job_queue)
         # Keep processing until queue is empty and all jobs are done
         while self.batch_job_queue or self.batch_running_jobs:
             # Start new jobs if GPUs are available and jobs are queued
@@ -4156,15 +4185,20 @@ class TomoGUI(QWidget):
                 gpu_id = self.batch_available_gpus.pop(0)
                 job_tuple = self.batch_job_queue.pop(0)
                 file_info, job_recon_type, job_machine = job_tuple
-
                 # Update status (safely handle deleted widgets)
                 try:
-                    file_info['status_item'].setText(f'Running on GPU {gpu_id}')
+                    self._set_status_by_filename(
+                    file_info["filename"],
+                    f"Running on GPU {gpu_id}",
+                    status_col=3,
+                    filename_col=1,
+                    color="blue"
+                    )
                 except RuntimeError:
                     # Widget was deleted, skip status update
                     pass
                 queue_len = len(self.batch_job_queue)
-                self.batch_queue_label.setText(f"Queue: {len(self.batch_job_queue)} jobs waiting")
+                self.batch_queue_label.setText(f"Queue: {queue_len} jobs waiting")
                 QApplication.processEvents()
 
                 # Start job asynchronously
@@ -4184,12 +4218,23 @@ class TomoGUI(QWidget):
                     # Safely update status (widget may have been deleted if list was refreshed)
                     try:
                         if exit_code == 0:
-                            file_info['status_item'].setText(f'{job_recon_type.capitalize()} Complete')
+                            self._set_status_by_filename(
+                                file_info["filename"],
+                                f"Done try",
+                                status_col=3,
+                                filename_col=1,
+                                color="orange"
+                                    )
                             self.log_output.append(f'<span style="color:green;">✅ GPU {gpu_id} finished: {file_info["filename"]}</span>')
                             # Update row color based on new reconstruction status
-                            self._update_row_color(file_info)
                         else:
-                            file_info['status_item'].setText(f'{job_recon_type.capitalize()} Failed')
+                            self._set_status_by_filename(
+                                file_info["filename"],
+                                f"Failed try",
+                                status_col=3,
+                                filename_col=1,
+                                color="red"
+                            )
                             self.log_output.append(f'<span style="color:red;">❌ GPU {gpu_id} failed: {file_info["filename"]}</span>')
                     except RuntimeError:
                         # Widget was deleted (e.g., user refreshed the list)
@@ -4209,7 +4254,7 @@ class TomoGUI(QWidget):
             else:
                 progress = 0
             self.batch_progress_bar.setValue(progress)
-
+            self.progress_window.batch_progress_bar.setValue(progress)  # UPDATE: Sync Progress Bar
             # Show which GPUs are active
             active_gpus = sorted(self.batch_running_jobs.keys())
             gpu_status = f"GPUs: {active_gpus}" if active_gpus else "GPUs: idle"
@@ -4291,15 +4336,14 @@ class TomoGUI(QWidget):
         """
         file_path = file_info['path']
         filename = os.path.basename(file_path)
+        if recon_type is 'try':
+            # Get reconstruction parameters from Main tab
+            recon_way = self.recon_way_box.currentText()
+            cor_val = self.cor_input.text().strip()
+        elif recon_type is 'full':
+            # Get COR value EXCLUSIVELY from batch table (not from Main tab)
+            cor_val = file_info['cor_input'].text().strip()
 
-        # Get reconstruction parameters from Main tab
-        recon_way = self.recon_way_box.currentText()
-
-        # Get COR value EXCLUSIVELY from batch table (not from Main tab)
-        cor_val = file_info['cor_input'].text().strip()
-
-        # Batch tab always uses manual COR with the value from the batch table
-        # Validate COR - batch tab requires COR value to be set
         if not cor_val:
             self.log_output.append(f'<span style="color:orange;">⚠️  No COR value in batch table for {filename}, skipping</span>')
             # Return a dummy finished process
