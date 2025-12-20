@@ -1,6 +1,7 @@
 from PyQt5.QtWidgets import QDialog, QVBoxLayout, QGroupBox, QProgressBar, QLabel, QPushButton
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import QTimer, pyqtSignal
 
+stop_requested = pyqtSignal()
 class ProgressWindow(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -33,7 +34,7 @@ class ProgressWindow(QDialog):
         self.setLayout(dialog_layout)
 
         # Connect stop button
-        self.batch_stop_btn.clicked.connect(self.stop_batch)
+        self.batch_stop_btn.clicked.connect(self.stop_requested.emit)
 
         # Timer to simulate progress updates
         self.timer = QTimer(self)
