@@ -342,16 +342,15 @@ class TomoGUI(QWidget):
         batch_recon_btn =QPushButton("Batch Try")
         batch_recon_btn.setStyleSheet("QPushButton { font-size: 10.5pt; }")
         batch_recon_btn.setToolTip("Run batch try reconstruction on selected files,the params are from GUI and COR guess from value put on single operation above")
-        batch_recon_btn.clicked.connect(self._batch_run_try_selected) #TODO: needs to modify to work with table
+        batch_recon_btn.clicked.connect(self._batch_run_try_selected)
         batch_ops.addWidget(batch_recon_btn)
         batch_full_btn =QPushButton("Batch Full")
         batch_full_btn.setStyleSheet("QPushButton { font-size: 10.5pt; }")
         batch_full_btn.setToolTip("Run batch full reconstruction on selected files,the params are from GUI and COR from Table above")
-        batch_full_btn.clicked.connect(self.batch_full_reconstruction) #TODO: needs to modify to work with table
+        batch_full_btn.clicked.connect(self._batch_run_full_selected) #TODO: needs to modify to work with table
         batch_ops.addWidget(batch_full_btn)
         main_tab.addLayout(batch_ops)
-        #TODO: pop up progress bar window, needs to modify batch try and full functions
-        #Row 6: process log
+        #Row 6: log
         log_box = QVBoxLayout()
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
@@ -4083,7 +4082,7 @@ class TomoGUI(QWidget):
 
     def _batch_run_full_selected(self):
         """Run full reconstruction on all selected files with GPU queue management"""
-        selected_files = [f for f in self.batch_main_file_list if f['checkbox'].isChecked()]
+        selected_files = [f for f in self.batch_file_main_list if f['checkbox'].isChecked()]
         machine = self.batch_machine_box.currentText()
 
         if not selected_files:
@@ -4139,10 +4138,6 @@ class TomoGUI(QWidget):
         """
         Run batch reconstructions with GPU queue management
         """
-        # <<< CHANGED: validate early; do NOT open progress window if invalid
-        if not selected_files:
-            self.log_output.append('<span style="color:red;">❌ No files selected.</span>')
-            return
 
         jobs_to_add = [(f, recon_type, machine) for f in selected_files]
 
@@ -4182,7 +4177,7 @@ class TomoGUI(QWidget):
         self.batch_queue_label.setText(f"Queue: {len(self.batch_job_queue)} jobs waiting")
         QApplication.processEvents()
 
-        progress_window_opened = False  # <<< CHANGED: gate progress window
+        progress_window_opened = False  #gate progress window
 
         # Keep processing until queue is empty and all jobs are done
         while self.batch_job_queue or self.batch_running_jobs:
@@ -4205,9 +4200,9 @@ class TomoGUI(QWidget):
                 self.batch_queue_label.setText(f"Queue: {len(self.batch_job_queue)} jobs waiting")
                 QApplication.processEvents()
 
-                # <<< FIX: CAPTURE return value (process) and validate it
+                # capture return value (process) and validate it
                 try:
-                    process = self._start_batch_job_async(file_info, job_recon_type, gpu_id, job_machine)  # <<< FIX
+                    process = self._start_batch_job_async(file_info, job_recon_type, gpu_id, job_machine)  
                 except Exception as e:
                     self.log_output.append(
                         f'<span style="color:red;">❌ Failed to start job for {file_info.get("filename","?")}: {e}</span>'
@@ -4416,12 +4411,12 @@ class TomoGUI(QWidget):
                     self.log_output.append(
                         f'<span style="color:red;">❌ Invalid COR value "{cor_val}" for {filename}, skipping</span>'
                     )
-                    return None  # <<< CHANGED: return None to indicate failure
+                    return None  #return None to indicate failure
 
         elif recon_type == 'full':
-            recon_way = self.recon_way_box_full.currentText()  # <<< FIX (recon_way was undefined)
+            recon_way = self.recon_way_box_full.currentText()  
             cor_val = file_info['cor_input'].text().strip()
-            rec_method = self.cor_full_method.currentText()  # <<< FIX (was widget object)
+            rec_method = self.cor_full_method.currentText()  
 
             if not cor_val:
                 self.log_output.append(
@@ -4447,7 +4442,7 @@ class TomoGUI(QWidget):
             self.log_output.append(
                 f'<span style="color:red;">❌ Unknown recon_type "{recon_type}"</span>'
             )
-            return None  # <<< CHANGED
+            return None  
 
         # Build command
         if self.use_conf_box.isChecked():
@@ -4458,7 +4453,7 @@ class TomoGUI(QWidget):
             with open(temp_conf, "w") as f:
                 f.write(config_text)
 
-            # <<< CHANGED: always build cmd deterministically
+            #always build cmd deterministically
             if rec_method == "manual":
                 cmd = [
                     "tomocupy", str(recon_way),
