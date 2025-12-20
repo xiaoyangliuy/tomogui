@@ -52,10 +52,7 @@ class TomoGUI(QWidget):
         #initialize progress bar for batch process
         self.progress_window = ProgressWindow(self)
         #stop button in progress window stops the same batch queue
-        try:
-            self.progress_window.stop_requested.connect(self._batch_stop_queue)
-        except Exception:
-            pass
+        self.progress_window.stop_requested.connect(self._batch_stop_queue)
 
         # State
         self.default_cmap = "gray"
@@ -4252,7 +4249,6 @@ class TomoGUI(QWidget):
                         pass
 
                 self.batch_running_jobs[gpu_id] = (process, file_info, job_recon_type)
-                print(f'should show {self.batch_running_jobs}')
 
                 self.log_output.append(
                     f'<span style="color:blue;">🚀 GPU {gpu_id}: Started {job_recon_type} - {file_info["filename"]} '
@@ -4336,60 +4332,70 @@ class TomoGUI(QWidget):
 
 
     def _batch_stop_queue(self):
-        """Stop the batch queue and kill all running processes"""
-        if not self.batch_running:
+        """Immediately stop the batch queue and kill all running jobs."""
+
+        # Nothing to stop
+        if not getattr(self, "batch_running", False):
             return
 
-        reply = QMessageBox.question(
-            self, 'Stop Batch Queue',
-            f'Stop the batch queue?\n\n'
-            f'This will kill {len(self.batch_running_jobs)} running job(s) and clear {len(self.batch_job_queue)} queued job(s).',
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-        )
+        # ===== CRITICAL: stop scheduling FIRST =====
+        self.batch_running = False
 
-        if reply == QMessageBox.No:
-            return
-
-        # Kill all running processes
+        # ===== Kill all running processes =====
         for gpu_id, (process, file_info, job_recon_type) in list(self.batch_running_jobs.items()):
             try:
-                process.kill()
+                # Best-effort terminate → kill
                 try:
-                    file_info['status_item'].setText('Cancelled')
-                except RuntimeError:
-                    pass  # Widget was deleted
-                self.log_output.append(f'<span style="color:orange;">⚠️  Killed job on GPU {gpu_id}: {file_info["filename"]}</span>')
-            except:
+                    process.terminate()
+                    if not process.waitForFinished(1500):
+                        process.kill()
+                except Exception:
+                    process.kill()
+            except Exception:
                 pass
 
-        # Clear queued jobs
+            # Update table status
+            try:
+                self._set_status_by_filename(file_info['filename'],text="Cancelled batch",color='red')
+            except Exception:
+                pass
+
+            self.log_output.append(
+                f'<span style="color:orange;">🛑 Cancelled job on GPU {gpu_id}: '
+                f'{file_info.get("filename", "")}</span>'
+            )
+
+        # ===== Cancel queued (not yet started) jobs =====
         for file_info, job_recon_type, job_machine in self.batch_job_queue:
             try:
-                file_info['status_item'].setText('Cancelled')
-            except RuntimeError:
-                pass  # Widget was deleted
+                self._set_status_by_filename(file_info['filename'],text="Cancelled batch",color='red')
+            except Exception:
+                pass
 
-        # Reset queue state
-        self.batch_job_queue = []
-        self.batch_running_jobs = {}
-        self.batch_running = False
+        # ===== Clear internal state =====
+        self.batch_job_queue.clear()
+        self.batch_running_jobs.clear()
+
+        # ===== Reset MAIN GUI =====
         self.batch_stop_btn.setEnabled(False)
         self.batch_progress_bar.setValue(0)
-        self.batch_status_label.setText("Batch queue stopped by user")
+        self.batch_status_label.setText("Batch stopped")
         self.batch_queue_label.setText("Queue: 0 jobs waiting")
-        self.log_output.append(f'<span style="color:orange;">🛑 Batch queue stopped by user</span>')
-        #mirror stop state to the progress window if open
+
+        # ===== Mirror state to PROGRESS WINDOW =====
         try:
             if hasattr(self, "progress_window") and self.progress_window is not None:
                 self.progress_window.set_running(False)
                 self.progress_window.set_progress(0)
-                self.progress_window.set_status("Batch queue stopped by user")
+                self.progress_window.set_status("Batch stopped")
                 self.progress_window.set_queue(0)
         except Exception:
             pass
 
-        self.log_output.append(f'<span style="color:orange;">🛑 Batch queue stopped by user</span>')
-        
+        self.log_output.append(
+            '<span style="color:orange;">🛑 Batch queue stopped by user</span>'
+        )
+            
     def _start_batch_job_async(self, file_info, recon_type, gpu_id, machine):
         """
         Start a reconstruction job asynchronously

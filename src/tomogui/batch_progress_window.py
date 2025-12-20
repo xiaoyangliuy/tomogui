@@ -3,6 +3,7 @@ from PyQt5.QtCore import QTimer, pyqtSignal
 
 class ProgressWindow(QDialog):
     stop_requested = pyqtSignal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -34,8 +35,54 @@ class ProgressWindow(QDialog):
         self.setLayout(dialog_layout)
 
         # Connect stop button
-        self.batch_stop_btn.clicked.connect(self.stop_requested.emit)
+        self.batch_stop_btn.clicked.connect(self._on_stop_clicked)  # emit stop_requested
 
+        # Timer to simulate progress updates (unused unless you call start_progress)
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_progress)
+
+        # Keep track of progress
+        self.current_value = 0
+        self.is_running = False
+
+    def start_progress(self):
+        """Start the timer to simulate the progress bar's progress (optional)."""
+        self.is_running = True
+        self.timer.start(100)  # Update progress every 100ms
+        self.batch_stop_btn.setEnabled(True)  # Enable stop button
+
+    def stop_batch(self):
+        """Stop the simulated progress timer (optional)."""
+        self.is_running = False
+        self.timer.stop()  # Stop progress updates
+        self.batch_stop_btn.setEnabled(False)  # Disable stop button
+        self.batch_status_label.setText("Batch stopped.")
+
+    def update_progress(self):
+        """Simulated progress update (optional)."""
+        if self.is_running:
+            self.current_value += 1
+            if self.current_value > 100:
+                self.current_value = 100
+                self.timer.stop()
+                self.batch_status_label.setText("Batch completed")
+
+            self.batch_progress_bar.setValue(self.current_value)
+            self.batch_status_label.setText(f"Progress: {self.current_value}%")
+
+    def update_queue_label(self, queue_size):
+        """Update the queue label to show remaining jobs (optional)."""
+        self.batch_queue_label.setText(f"Queue: {queue_size} jobs waiting")
+
+    # better stop button UX + emit signal =====
+    def _on_stop_clicked(self):
+        """UI handler for the Stop button."""
+        # Disable immediately to prevent double-clicks; GUI will re-enable if needed
+        self.batch_stop_btn.setEnabled(False)
+        self.batch_status_label.setText("Stopping…")
+        self.stop_requested.emit()
+
+    # external control API used by gui.py =====
     def set_running(self, running: bool):
         """Enable/disable the stop button depending on batch state."""
         self.batch_stop_btn.setEnabled(bool(running))
