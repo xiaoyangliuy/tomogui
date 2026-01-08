@@ -1907,7 +1907,7 @@ class TomoGUI(QWidget):
             self.data_path.setText(dialog.selectedFiles()[0])
             self.refresh_main_table()
             # Auto-refresh batch file list when folder is selected
-            self._refresh_batch_file_list() #TODO:Need decide if remove the batch process tab
+            #self._refresh_batch_file_list() #TODO:Need decide if remove the batch process tab
 
     def refresh_main_table(self):
         table_folder = self.data_path.text()
@@ -2102,15 +2102,14 @@ class TomoGUI(QWidget):
     def on_table_row_clicked(self, row, column):
         # Get the filename from the clicked row
         filename_item = self.batch_file_main_table.item(row, 1)  # Column 1 contains the filename
-        if filename_item:
-            filename = filename_item.text()
-            # Update self.highlight_scan with the full path of the selected file
-            for file_info in self.batch_file_list:
-                if file_info['filename'] == filename:
-                    self.highlight_scan = file_info['path']
-                    self.highlight_row = row #gives index of the self.batch_file_table_list
-            # Log or print the selected file for debugging
-            self.log_output.append(f'Click on {self.highlight_scan} now for other operations')
+        filename = filename_item.text()
+        # Update self.highlight_scan with the full path of the selected file
+        for file_info in self.batch_file_main_list:
+            if file_info['filename'] == filename:
+                self.highlight_scan = file_info['path']
+                self.highlight_row = row #gives index of the self.batch_file_table_list
+        # Log or print the selected file for debugging
+        self.log_output.append(f'Click on {self.highlight_scan} now for other operations')
 
     def load_config(self):
         dialog = QFileDialog(self)
@@ -2293,6 +2292,7 @@ class TomoGUI(QWidget):
             self.log_output.append(f'<span style="color:red;">\u26d4 [{name}] aborted.</span>')
 
         self.process.clear()
+        self.batch_running = False
 
     def run_command_live(self, cmd, proj_file=None, job_label=None, *, wait=False, cuda_devices=None):
         """
@@ -2460,12 +2460,14 @@ class TomoGUI(QWidget):
         pn = os.path.splitext(os.path.basename(proj_file))[0]
         recon_way = self.recon_way_box_full.currentText()  
         highlight_row = self.highlight_row
-        try:
-            cor_value = float(self.batch_file_main_list[highlight_row]['cor_input'].text().strip())
-        except ValueError:
-            self.log_output.append(f'<span style="color:red;">\u274c[ERROR] Invalid Full COR value</span>')
-            return
+        cor_method = self.cor_full_method.currentText()
         gpu = str(self.cuda_full_box.value())
+        if cor_method == "manual":
+            try:
+                cor_value = float(self.batch_file_main_list[highlight_row]['cor_input'].text().strip())
+            except ValueError:
+                self.log_output.append(f'<span style="color:red;">\u274c[ERROR] Invalid Full COR value</span>')
+                return
         if self.use_conf_box.isChecked():
             self.log_output.append("\u26a0\ufe0f You are using config file, only recon type, filename, rot axis from GUI")
             config_text = self.config_editor_full.toPlainText()
@@ -2483,12 +2485,20 @@ class TomoGUI(QWidget):
              "--rotation-axis", str(cor_value)]    
         else:
             self.log_output.append('\u26a0\ufe0f You are using params from GUI')
-            # Base command
-            cmd = ["tomocupy", str(recon_way),
-               "--reconstruction-type", "full",
-               "--file-name", proj_file, 
-               "--rotation-axis", str(cor_value)]
-            # Append tabs selections
+            if cor_method == "auto":
+                # Base command
+                cmd = ["tomocupy", str(recon_way),
+                "--reconstruction-type", "full",
+                "--file-name", proj_file, 
+                "--rotation-axis-auto", cor_method]
+            elif cor_method == "manual":
+                # Base command
+                cmd = ["tomocupy", str(recon_way),
+                "--reconstruction-type", "full",
+                "--file-name", proj_file, 
+                "--rotation-axis-auto", cor_method,
+                "--rotation-axis", str(cor_value)]
+                # Append tabs selections
             cmd += self._gather_params_args()
             cmd += self._gather_rings_args()
             cmd += self._gather_bhard_args()
@@ -2643,7 +2653,7 @@ class TomoGUI(QWidget):
 
     def view_full_reconstruction(self):
         data_folder = self.data_path.text().strip()
-        proj_file = self.proj_file_box.currentData()
+        proj_file = self.highlight_scan
         proj_name = os.path.splitext(os.path.basename(proj_file))[0]
         full_dir = os.path.join(f"{data_folder}_rec", f"{proj_name}_rec")
 
@@ -3646,20 +3656,20 @@ class TomoGUI(QWidget):
     #     # Refresh the main file dropdown
     #     self.refresh_h5_files()
 
-    # def _batch_view_data(self, file_path):
-    #     """Open HDF5 viewer to view original data"""
-    #     if not os.path.exists(file_path):
-    #         QMessageBox.warning(self, "File Not Found", f"File does not exist:\n{file_path}")
-    #         return
+    def _batch_view_data(self, file_path):
+         """Open HDF5 viewer to view original data"""
+         if not os.path.exists(file_path):
+             QMessageBox.warning(self, "File Not Found", f"File does not exist:\n{file_path}")
+             return
 
-    #     try:
-    #         # Create and show the HDF5 viewer dialog
-    #         viewer = HDF5ImageDividerDialog(file_path=file_path, parent=self)
-    #         viewer.show()
-    #         self.log_output.append(f'<span style="color:green;">✅ Opened HDF5 viewer for: {os.path.basename(file_path)}</span>')
-    #     except Exception as e:
-    #         QMessageBox.critical(self, "Error", f"Failed to open HDF5 viewer:\n{str(e)}")
-    #         self.log_output.append(f'<span style="color:red;">❌ Failed to open HDF5 viewer: {str(e)}</span>')
+         try:
+             # Create and show the HDF5 viewer dialog
+             viewer = HDF5ImageDividerDialog(file_path=file_path, parent=self)
+             viewer.show()
+             self.log_output.append(f'<span style="color:green;">✅ Opened HDF5 viewer for: {os.path.basename(file_path)}</span>')
+         except Exception as e:
+             QMessageBox.critical(self, "Error", f"Failed to open HDF5 viewer:\n{str(e)}")
+             self.log_output.append(f'<span style="color:red;">❌ Failed to open HDF5 viewer: {str(e)}</span>')
 
     # def _batch_view_try(self, file_path):
     #     """View try reconstruction for a specific file"""
@@ -4048,10 +4058,10 @@ class TomoGUI(QWidget):
         self.batch_running_jobs.clear()
 
         # ===== Reset MAIN GUI =====
-        self.batch_stop_btn.setEnabled(False)
-        self.batch_progress_bar.setValue(0)
-        self.batch_status_label.setText("Batch stopped")
-        self.batch_queue_label.setText("Queue: 0 jobs waiting")
+        #self.batch_stop_btn.setEnabled(False)
+        #self.batch_progress_bar.setValue(0)
+        #self.batch_status_label.setText("Batch stopped")
+        #self.batch_queue_label.setText("Queue: 0 jobs waiting")
 
         # ===== Mirror state to PROGRESS WINDOW =====
         try:
@@ -4153,7 +4163,7 @@ class TomoGUI(QWidget):
                     "tomocupy", str(recon_way),
                     "--reconstruction-type", recon_type,
                     "--file-name", file_path,
-                    "--rotation-axis-auto", "manual",
+                    "--rotation-axis-auto", rec_method,
                     "--rotation-axis", str(cor)
                 ]
             else:
@@ -4163,6 +4173,15 @@ class TomoGUI(QWidget):
                     "--file-name", file_path,
                     "--rotation-axis-auto", "auto"
                 ]
+            # Append tabs selections
+            cmd += self._gather_params_args()
+            cmd += self._gather_rings_args()
+            cmd += self._gather_bhard_args()
+            cmd += self._gather_phase_args()
+            cmd += self._gather_Geometry_args()        
+            cmd += self._gather_Data_args()                
+            cmd += self._gather_Performance_args()           
+        self.log_output.append(f'{cmd}')    
 
         # <<< FIX: assign wrapped cmd (previously return value was ignored)
         cmd = self._get_batch_machine_command(cmd, machine)  # <<< FIX
