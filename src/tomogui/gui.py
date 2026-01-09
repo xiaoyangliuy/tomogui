@@ -1,11 +1,5 @@
 import os, glob, json
 import numpy as np
-import matplotlib
-import importlib.resources
-matplotlib.use("Qt5Agg")
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
-from matplotlib.figure import Figure
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QFileDialog, QTextEdit, QLineEdit, QLabel, QProgressBar,
@@ -17,26 +11,24 @@ from PyQt5.QtCore import Qt, QEvent, QProcess, QEventLoop, QSize, QProcessEnviro
 from PyQt5.QtGui import QColor
 from pathlib import Path
 
-
 from PIL import Image
-from matplotlib.widgets import RectangleSelector
-from matplotlib.backend_bases import MouseButton
-from mpl_toolkits.axes_grid1 import make_axes_locatable
 import h5py, json
 from datetime import datetime
+
+# VisPy for fast GPU-accelerated rendering
+try:
+    from vispy import scene
+    from vispy.scene import visuals
+    from vispy.color import get_colormaps
+    VISPY_AVAILABLE = True
+except ImportError:
+    print("Warning: VisPy not available. Install with: pip install vispy")
+    print("Falling back to slower rendering...")
+    VISPY_AVAILABLE = False
 
 from .theme_manager import ThemeManager
 from .hdf5_viewer import HDF5ImageDividerDialog
 from .batch_progress_window import ProgressWindow
-
-# Load matplotlib style from package resources
-matplotlib.rcdefaults()
-try:
-    with importlib.resources.path('tomo_gui.styles', 'tomoGUI_mpl_format.mplstyle') as style_path:
-        matplotlib.style.use(str(style_path))
-except (ImportError, FileNotFoundError):
-    # Fallback if style file is not found
-    pass
 
 
 class TomoGUI(QWidget):
@@ -278,9 +270,9 @@ class TomoGUI(QWidget):
                                                 font-weight: bold; /* Make header text bold */
                                                 }
                                                 """)
-        self.batch_file_main_table.setColumnCount(6)
-        self.batch_file_main_table.setHorizontalHeaderLabels(["Select","File Name", "COR", 
-                                                         "Status", "Size", "Pixel"])
+        self.batch_file_main_table.setColumnCount(7)
+        self.batch_file_main_table.setHorizontalHeaderLabels(["Select","File Name", "COR",
+                                                         "Status", "Size", "Pixel", "View Data"])
         self.batch_file_main_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         header = self.batch_file_main_table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)  # Allow user to resize columns
@@ -290,6 +282,7 @@ class TomoGUI(QWidget):
         header.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # Status
         header.setSectionResizeMode(4, QHeaderView.Stretch)  # Size
         header.setSectionResizeMode(5, QHeaderView.Stretch)  # Actions
+        header.setSectionResizeMode(6, QHeaderView.ResizeToContents)  # View Data
         self.batch_file_main_table.setColumnWidth(0,50)
         self.batch_file_main_table.setColumnWidth(1, 350) # Set initial width for filename column to be wider (can be resized by user)    
         main_tab.addWidget(self.batch_file_main_table)
@@ -342,6 +335,12 @@ class TomoGUI(QWidget):
         deselect_all_btn.clicked.connect(self._batch_deselect_all)
         deselect_all_btn.setFixedWidth(120)
         batch_ops.addWidget(deselect_all_btn)
+        view_selected_btn = QPushButton("View Selected Data")
+        view_selected_btn.setStyleSheet("QPushButton { font-size: 10.5pt; }")
+        view_selected_btn.setToolTip("Open HDF5 viewer for first selected file")
+        view_selected_btn.clicked.connect(self._batch_view_selected_data)
+        view_selected_btn.setFixedWidth(135)
+        batch_ops.addWidget(view_selected_btn)
         separator_batch = QLabel("  |  ")
         separator_batch.setStyleSheet("QLabel { font-size: 11pt; }")
         separator_batch.setFixedWidth(23)
@@ -401,37 +400,46 @@ class TomoGUI(QWidget):
         # ==== RIGHT PANEL ====
         right_layout = QVBoxLayout()
         toolbar_row = QHBoxLayout()
-        self.fig = Figure(figsize=(5, 6.65))
-        self.canvas = FigureCanvas(self.fig)
-        self.ax = self.fig.add_subplot(111)
-        self.fig.set_constrained_layout(True)
+
+        # Check if VisPy is available
+        if not VISPY_AVAILABLE:
+            error_label = QLabel("ERROR: VisPy not installed!\n\nPlease install with:\n  pip install vispy PyOpenGL")
+            error_label.setStyleSheet("color: red; font-size: 14pt; font-weight: bold; padding: 20px;")
+            error_label.setAlignment(Qt.AlignCenter)
+            toolbar_row.addWidget(error_label)
+            right_layout.addLayout(toolbar_row)
+            main_layout.addLayout(right_layout, 8)
+            self.setLayout(main_layout)
+            return
+
+        # VisPy canvas setup
+        self.canvas = scene.SceneCanvas(keys='interactive', show=False)
+        self.view = self.canvas.central_widget.add_view()
+        self.view.camera = scene.PanZoomCamera()
+        self.view.camera.flip = (False, True, False)  # Flip Y for image coords
+        self.image_visual = visuals.Image(cmap='grays', parent=self.view.scene)
+        self.canvas_widget = self.canvas.native
+
+        # State for vispy
         self._keep_zoom = False
-        self._last_xlim = None
-        self._last_ylim = None
+        self._last_camera_rect = None
         self._last_image_shape = None
-        self.rect_selector = None
         self.roi_extent = None
         self._drawing_roi = False
-        self.canvas.mpl_connect("button_press_event", self._on_canvas_click)
-        self.toolbar = NavigationToolbar2QT(self.canvas, self)
-        self.toolbar.setIconSize(QSize(23,23))
-        self.toolbar.setToolButtonStyle(Qt.ToolButtonIconOnly)
-        self.toolbar.setStyleSheet("QToolButton { padding: 0.15px; }")
-        self.toolbar.coordinates = False #disable default coords
-        self.canvas.setMouseTracking(True)
-        self.toolbar.setFixedWidth(270)
-        toolbar_row.addWidget(self.toolbar)
-        toolbar_row.addSpacing(1)
+        self._roi_visual = None
+        self._roi_start = None
+
+        # Connect vispy mouse events
+        self.canvas.events.mouse_move.connect(self._on_vispy_mouse_move)
+        self.canvas.events.mouse_press.connect(self._on_vispy_mouse_click)
+        self.canvas.events.mouse_release.connect(self._on_vispy_mouse_release)
+
+        # Coordinate label
         self.coord_label = QLabel("")
-        self.coord_label.setFixedWidth(150)
+        self.coord_label.setFixedWidth(350)
         self.coord_label.setStyleSheet("font-size: 11pt;")
         toolbar_row.addWidget(self.coord_label)
-        try:
-            self.toolbar._actions['home'].triggered.connect(self._on_toolbar_home)
-        except Exception:
-            pass
-        self._cid_motion = self.canvas.mpl_connect("motion_notify_event", self._on_mouse_move)
-        self._cid_release = self.canvas.mpl_connect("button_release_event", self._nav_oneshot_release)
+        toolbar_row.addSpacing(10)
 
         # Colormap dropdown
         toolbar_row.addWidget(QLabel("Cmap"))
@@ -478,10 +486,10 @@ class TomoGUI(QWidget):
         toolbar_row.addWidget(self.theme_toggle_btn)
 
         right_layout.addLayout(toolbar_row)
-        self.canvas.installEventFilter(self)
+        self.canvas_widget.installEventFilter(self)
 
         canvas_slider_frame = QVBoxLayout()
-        canvas_slider_frame.addWidget(self.canvas)
+        canvas_slider_frame.addWidget(self.canvas_widget)
         slider_layout = QHBoxLayout()
         self.slice_slider = QSlider(Qt.Horizontal)
         self.slice_slider.setStyleSheet("""
@@ -1850,7 +1858,11 @@ class TomoGUI(QWidget):
 
     def update_cmap(self): #link to cmap dropdown
         self.current_cmap = self.cmap_box.currentText()
-        self.refresh_current_image()
+        if VISPY_AVAILABLE and self._current_img is not None:
+            self.image_visual.cmap = self.current_cmap
+            self.canvas.update()
+        else:
+            self.refresh_current_image()
 
     def update_vmin_vmax(self): #link to min/max input
         try:
@@ -1863,10 +1875,10 @@ class TomoGUI(QWidget):
             vmax = None
         self.vmin = vmin
         self.vmax = vmax
-        im = self.ax.images[0] if self.ax.images else None
-        if im is not None and self.vmin is not None and self.vmax is not None:
-            im.set_clim(self.vmin, self.vmax)
-            self.canvas.draw_idle()
+
+        if VISPY_AVAILABLE and self._current_img is not None and self.vmin is not None and self.vmax is not None:
+            self.image_visual.clim = (self.vmin, self.vmax)
+            self.canvas.update()
         else:
             self.refresh_current_image()
 
@@ -1888,7 +1900,7 @@ class TomoGUI(QWidget):
         QTextEdit.focusOutEvent(editor, event)
 
     def eventFilter(self, obj, event):
-        if obj == self.canvas and event.type() == QEvent.Wheel:
+        if obj == self.canvas_widget and event.type() == QEvent.Wheel:
             step = 1 if event.angleDelta().y() > 0 else -1
             new_val = self.slice_slider.value() + step
             new_val = max(0, min(self.slice_slider.maximum(), new_val))
@@ -1908,6 +1920,64 @@ class TomoGUI(QWidget):
             self.refresh_main_table()
             # Auto-refresh batch file list when folder is selected
             #self._refresh_batch_file_list() #TODO:Need decide if remove the batch process tab
+
+    def _load_cor_data(self, data_folder, h5_files):
+        """
+        Load COR data from CSV or JSON file.
+        CSV format (batch_cor_values.csv): Filename,COR
+        JSON format (rot_cen.json): {full_path: cor_value}
+
+        CSV takes priority if both exist.
+
+        Returns:
+            tuple: (cor_data_dict, list_of_keys)
+                   cor_data_dict uses full file paths as keys
+        """
+        import csv
+
+        csv_path = os.path.join(data_folder, "batch_cor_values.csv")
+        json_path = os.path.join(data_folder, "rot_cen.json")
+
+        cor_data = {}
+
+        # Try CSV first (legacy format, takes priority)
+        if os.path.exists(csv_path):
+            try:
+                with open(csv_path, 'r') as csvfile:
+                    reader = csv.DictReader(csvfile)
+                    # Build a mapping from filename to full path
+                    filename_to_path = {os.path.basename(f): f for f in h5_files}
+
+                    for row in reader:
+                        filename = row.get('Filename', '').strip()
+                        cor_value = row.get('COR', '').strip()
+
+                        if filename and cor_value:
+                            # Convert filename to full path for consistency
+                            full_path = filename_to_path.get(filename)
+                            if full_path:
+                                cor_data[full_path] = cor_value
+
+                self.log_output.append(f'<span style="color:green;">✅ Loaded {len(cor_data)} COR values from batch_cor_values.csv</span>')
+                return cor_data, list(cor_data.keys())
+
+            except Exception as e:
+                self.log_output.append(f'<span style="color:red;">❌ Error loading CSV: {e}</span>')
+
+        # Try JSON if CSV doesn't exist or failed
+        if os.path.exists(json_path):
+            try:
+                with open(json_path, 'r') as f:
+                    cor_data = json.load(f)
+                    self.log_output.append(f'<span style="color:green;">✅ Loaded {len(cor_data)} COR values from rot_cen.json</span>')
+                    return cor_data, list(cor_data.keys())
+            except json.JSONDecodeError as e:
+                self.log_output.append(f'<span style="color:red;">❌ Error loading rot_cen.json: {e}</span>')
+                return {}, []
+
+        # No COR file found
+        self.log_output.append('<span style="color:orange;">⚠️  No COR file found (checked batch_cor_values.csv and rot_cen.json)</span>')
+        return {}, []
 
     def refresh_main_table(self):
         table_folder = self.data_path.text()
@@ -1930,19 +2000,9 @@ class TomoGUI(QWidget):
         self.batch_file_main_table.setRowCount(0)
         self.batch_file_main_list = []
         self.batch_last_clicked_row = None
-        json_path = os.path.join(table_folder,"rot_cen.json")
-        if os.path.exists(json_path):
-            with open(json_path, 'r') as f:
-                try:
-                    self.cor_data = json.load(f)
-                    fns = list(self.cor_data.keys())
-                    self.log_output.append('Get cors from rot_cen.json')
-                except json.JSONDecodeError:
-                    self.log_output.append(f'<span style="color:red;">Error load rot.cen.json, stop</span>')
-                    return
-        else:
-            fns = []
-            self.log_output.append(f'No rot.cen.json')
+
+        # Load COR data from JSON or CSV (CSV takes priority if both exist)
+        self.cor_data, fns = self._load_cor_data(table_folder, h5_files)
         #populate table
         for f in h5_files:
             filename = os.path.basename(f)
@@ -2026,12 +2086,19 @@ class TomoGUI(QWidget):
                 self.batch_file_main_table.setItem(row, 4, size_item)
             except Exception as e:
                 self.batch_file_main_table.setItem(row, 4, QTableWidgetItem("N/A"))
-            # Actions button
+            # Actions button (placeholder for future actions)
             actions_widget = QWidget()
             actions_layout = QHBoxLayout(actions_widget)
             actions_layout.setContentsMargins(2, 2, 2, 2)
             actions_layout.setSpacing(2)
             self.batch_file_main_table.setCellWidget(row, 5, actions_widget)
+
+            # View Data button
+            view_data_btn = QPushButton("View Data")
+            view_data_btn.setFixedWidth(80)
+            view_data_btn.clicked.connect(lambda checked, fp=f: self._batch_view_data(fp))
+            self.batch_file_main_table.setCellWidget(row, 6, view_data_btn)
+
             # Apply colored left border indicator based on reconstruction status
             # Create a colored indicator in the checkbox column
             checkbox_widget.setStyleSheet(f"QWidget {{ border-left: 6px solid {row_color}; }}")
@@ -2044,48 +2111,75 @@ class TomoGUI(QWidget):
             self.highlight_row = 0
             self.log_output.append(f'Clicked on {self.highlight_scan}')
 
+    def _save_cor_data(self, data_folder, cor_data_dict):
+        """
+        Save COR data to both CSV and JSON formats.
+        Saves to the format that already exists, or JSON if neither exists.
+
+        Args:
+            data_folder: Path to data folder
+            cor_data_dict: Dictionary with full file paths as keys and COR values
+        """
+        import csv
+
+        csv_path = os.path.join(data_folder, "batch_cor_values.csv")
+        json_path = os.path.join(data_folder, "rot_cen.json")
+
+        csv_exists = os.path.exists(csv_path)
+        json_exists = os.path.exists(json_path)
+
+        # Save to CSV if it exists or if both don't exist (backward compatibility)
+        if csv_exists:
+            try:
+                with open(csv_path, 'w', newline='') as csvfile:
+                    writer = csv.writer(csvfile)
+                    writer.writerow(['Filename', 'COR'])
+                    for full_path, cor_value in sorted(cor_data_dict.items()):
+                        filename = os.path.basename(full_path)
+                        writer.writerow([filename, cor_value])
+                self.log_output.append(f'<span style="color:green;">✔ COR values saved to CSV</span>')
+            except Exception as e:
+                self.log_output.append(f'<span style="color:red;">❌ Failed to write CSV: {e}</span>')
+
+        # Always save to JSON (current format)
+        try:
+            with open(json_path, "w") as f:
+                json.dump(cor_data_dict, f, indent=2)
+            if not csv_exists:
+                self.log_output.append(f'<span style="color:green;">✔ COR values saved to JSON</span>')
+        except Exception as e:
+            self.log_output.append(f'<span style="color:red;">❌ Failed to write JSON: {e}</span>')
+
     def _on_main_cor_edited(self, file_path:str, row:int):
         """
         Called when the COR QLineEdit in the MAIN table is edited.
-        Writes/updates data_folder/rot_cen.json using full file path keys.
+        Writes/updates COR data to both CSV and JSON if they exist.
         """
         data_folder = self.data_path.text().strip()
         if not data_folder:
             return
-        json_path = os.path.join(data_folder, "rot_cen.json")
+
         # Get the widget (QLineEdit) from the table
         w = self.batch_file_main_table.cellWidget(row, 2)
         if w is None:
             return
         txt = w.text().strip()
         if txt == "":
-            return  # user cleared it; you can choose to delete from json if you want
+            return  # user cleared it
+
         # Validate numeric
         try:
             float(txt)
         except ValueError:
             self.log_output.append(f'<span style="color:red;">❌ Invalid COR "{txt}" for {os.path.basename(file_path)}</span>')
             return
-        # Load existing JSON (robust)
-        cor_data = {}
-        if os.path.exists(json_path):
-            try:
-                with open(json_path, "r") as f:
-                    cor_data = json.load(f) or {}
-            except Exception:
-                cor_data = {}
-        # Update + write
-        cor_data[file_path] = txt
-        try:
-            with open(json_path, "w") as f:
-                json.dump(cor_data, f, indent=2)
-            self.log_output.append(f'<span style="color:green;">✔ COR updated:'
-                                    f'{os.path.basename(file_path)} → {txt}</span>')
-        except Exception as e:
-            self.log_output.append(f'<span style="color:red;">❌ Failed to write rot_cen.json: {e}</span>')
-            return
-        # Keep in-memory copy consistent
-        self.cor_data = cor_data
+
+        # Update in-memory data
+        self.cor_data[file_path] = txt
+
+        # Save to file(s)
+        self._save_cor_data(data_folder, self.cor_data)
+
         # Keep your list consistent: store the widget, not a string
         try:
             self.batch_file_main_list[row]["cor_input"] = w
@@ -2608,22 +2702,21 @@ class TomoGUI(QWidget):
                 self.log_output.append("\u26a0\ufe0fNot take COR")
                 return
         self.cor_data[proj_file] = cor_value
-        try:
-            with open(json_path, "w") as f:
-                json.dump(self.cor_data, f, indent=2)
-            self.log_output.append(f"\u2705[INFO] COR saved for: {proj_file}")
-            w = self.batch_file_main_table.cellWidget(row, 2)
-            if w is None:
-                w = QLineEdit()
-                w.setAlignment(Qt.AlignCenter)
-                w.setFixedWidth(80)
-                self.batch_file_main_table.setCellWidget(row, 2, w)
-            w.setText(str(cor_value))
-            # keep list storing the widget
-            self.batch_file_main_list[row]['cor_input'] = w
-        except Exception as e:
-            self.log_output.append(f'<span style="color:red;">\u274cFailed to save rot_cen.json: {e}</span>')
-            return
+
+        # Save to file(s) using the helper method
+        self._save_cor_data(data_folder, self.cor_data)
+
+        # Update the table widget
+        w = self.batch_file_main_table.cellWidget(row, 2)
+        if w is None:
+            w = QLineEdit()
+            w.setAlignment(Qt.AlignCenter)
+            w.setFixedWidth(80)
+            self.batch_file_main_table.setCellWidget(row, 2, w)
+        w.setText(str(cor_value))
+        # keep list storing the widget
+        self.batch_file_main_list[row]['cor_input'] = w
+        self.log_output.append(f"\u2705[INFO] COR saved for: {os.path.basename(proj_file)}")
 
     # ===== IMAGE VIEWING =====
     def view_try_reconstruction(self):
@@ -2687,94 +2780,91 @@ class TomoGUI(QWidget):
 
     # ===== ROI AND CONTRAST =====
     def draw_box(self):
-        """Enable interactive ROI drawing. Drag to create; click to finish."""
+        """Enable interactive ROI drawing with VisPy."""
         if self._current_img is None:
             self.log_output.append("\u26a0\ufe0f No image loaded to draw box.")
             return
 
-        if self.rect_selector is None:
-            style = dict(edgecolor='red', facecolor='none', linewidth=2, alpha=1.0)
-            self.rect_selector = RectangleSelector(
-                self.ax,
-                self._on_rect_complete,
-                useblit=True,
-                button=[1],
-                minspanx=2, minspany=2,
-                spancoords='data',
-                interactive=True,
-                props=style
-            )
         self._drawing_roi = True
         self.roi_extent = None
-        self.rect_selector.set_active(True)
-        self.log_output.append("Drag to draw ROI, release to set. Any click on image will hide ROI.")
+        self._roi_start = None
+        self.log_output.append("Click and drag to draw ROI. Release to set. Click again to clear.")
 
-    def _on_rect_complete(self, eclick, erelease):
-        """Store ROI extents when user finishes dragging the rectangle."""
-        x0, y0 = eclick.xdata, eclick.ydata
-        x1, y1 = erelease.xdata, erelease.ydata
-        if None in (x0, y0, x1, y1):
-            self.roi_extent = None
-            self._drawing_roi = False
+    def _on_vispy_mouse_click(self, event):
+        """Handle mouse press for ROI drawing"""
+        if not self._drawing_roi:
+            if self.roi_extent is not None:
+                # Click clears existing ROI
+                self._clear_roi()
+                self.log_output.append('<span style="color:green;">ROI cleared</span>')
             return
+
+        tr = self.view.scene.transform
+        pos = tr.map(event.pos)[:2]
+        self._roi_start = pos
+
+    def _on_vispy_mouse_release(self, event):
+        """Handle mouse release for ROI drawing"""
+        if not self._drawing_roi or self._roi_start is None:
+            return
+
+        tr = self.view.scene.transform
+        pos = tr.map(event.pos)[:2]
+
+        x0, y0 = self._roi_start
+        x1, y1 = pos
         self.roi_extent = (min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1))
         self._drawing_roi = False
+
+        # Draw ROI rectangle with vispy
+        self._draw_roi_visual()
+
         self.log_output.append(
             f"ROI set: x[{int(self.roi_extent[0])}:{int(self.roi_extent[1])}], "
             f"y[{int(self.roi_extent[2])}:{int(self.roi_extent[3])}]"
         )
 
+    def _draw_roi_visual(self):
+        """Draw ROI rectangle using vispy Line visual"""
+        if self.roi_extent is None:
+            return
+
+        x0, x1, y0, y1 = self.roi_extent
+        # Create rectangle vertices
+        vertices = np.array([
+            [x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]
+        ], dtype=np.float32)
+
+        if self._roi_visual is not None:
+            self._roi_visual.parent = None
+
+        self._roi_visual = visuals.Line(pos=vertices, color='red', width=2, parent=self.view.scene)
+        self.canvas.update()
+
     def _clear_roi(self):
         """Hide/remove any active ROI."""
-        try:
-            if self.rect_selector is not None:
-                try:
-                    self.rect_selector.set_active(False)
-                    if hasattr(self.rect_selector, "set_visible"):
-                        self.rect_selector.set_visible(False)
-                except Exception:
-                    pass
-                self.rect_selector = None
-        finally:
-            self.roi_extent = None
-
-    def _on_canvas_click(self, event):
-        """Any click on the image hides/removes the ROI (unless we are mid-draw)."""
-        if event.inaxes != self.ax:
-            return
-        if self._drawing_roi:
-            return
-        if self.roi_extent is None and self.rect_selector is None:
-            return
-
-        try:
-            if self.rect_selector is not None:
-                self.rect_selector.set_active(False)
-                for art in getattr(self.rect_selector, 'artists', []):
-                    art.set_visible(False)
-                self.rect_selector = None
-        except Exception:
-            pass
+        if self._roi_visual is not None:
+            self._roi_visual.parent = None
+            self._roi_visual = None
         self.roi_extent = None
-        self.canvas.draw_idle()
-        self.log_output.append(f'<span style="color:green;">ROI cleared</span>')
+        self._drawing_roi = False
+        self.canvas.update()
 
-    def _on_mouse_move(self, event):
-        # show x,y and pixel value when mouse on image
-        if event.inaxes != self.ax or self._current_img is None:
+    def _on_vispy_mouse_move(self, event):
+        """Show coordinates under the mouse in the coord label."""
+        if self._current_img is None:
             if hasattr(self, "coord_label"):
                 self.coord_label.setText("")
             return
-        x, y = event.xdata, event.ydata
-        if x is None or y is None:
-            if hasattr(self, "coord_label"):
-                self.coord_label.setText("")
-            return
+
+        tr = self.view.scene.transform
+        pos = tr.map(event.pos)[:2]
+        x, y = int(pos[0]), int(pos[1])
+
         h, w = self._current_img.shape[:2]
-        ix, iy = int(round(x)), int(round(y))
-        if 0 <= ix < w and 0 <= iy < h:
-            val = self._current_img[iy, ix]
-            msg = f"({ix},{iy}): {float(val):.5f}"
+        if 0 <= x < w and 0 <= y < h:
+            val = self._current_img[y, x]
+            msg = f"({x},{y}): {float(val):.5f}"
         else:
             msg = ""
         if hasattr(self, "coord_label"):
@@ -2830,10 +2920,9 @@ class TomoGUI(QWidget):
         self.min_input.setText(str(self.vmin))
         self.max_input.setText(str(self.vmax))
 
-        im = self.ax.images[0] if self.ax.images else None
-        if im is not None:
-            im.set_clim(self.vmin, self.vmax)
-            self.canvas.draw_idle()
+        if VISPY_AVAILABLE and self._current_img is not None:
+            self.image_visual.clim = (self.vmin, self.vmax)
+            self.canvas.update()
         else:
             self.refresh_current_image()
 
@@ -2844,11 +2933,10 @@ class TomoGUI(QWidget):
         else:
             self.vmin, self.vmax = round(self._current_img.min(), 5), round(self._current_img.max(), 5)
             self.min_input.setText(str(self.vmin))
-            self.max_input.setText(str(self.vmax))            
-            im = self.ax.images[0] if self.ax.images else None
-            if im is not None:
-                im.set_clim(self.vmin, self.vmax)
-                self.canvas.draw_idle()
+            self.max_input.setText(str(self.vmax))
+            if VISPY_AVAILABLE and self._current_img is not None:
+                self.image_visual.clim = (self.vmin, self.vmax)
+                self.canvas.update()
             else:
                 self.refresh_current_image()
 
@@ -2900,123 +2988,50 @@ class TomoGUI(QWidget):
         self._current_img = img
         self._current_img_path = img_path
         self._clear_roi()
-        self.ax.clear()
-        im = self.ax.imshow(
-            img,
-            cmap=self.current_cmap,
-            vmin=self.vmin,
-            vmax=self.vmax,
-            origin="upper",
-            extent=[0, w, h, 0]
-        )
 
-        # Build title with source filename - LARGE and VISIBLE
-        if hasattr(self, '_current_source_file') and hasattr(self, '_current_view_mode'):
-            title = f"{self._current_source_file} [{self._current_view_mode}] - {os.path.basename(str(img_path))}"
-        else:
-            title = os.path.basename(str(img_path))
+        # Update vispy image visual
+        self.image_visual.set_data(img)
 
-        # Adapt title color and background to current theme
+        # Set color limits
+        vmin = self.vmin if self.vmin is not None else np.percentile(img, 1)
+        vmax = self.vmax if self.vmax is not None else np.percentile(img, 99)
+        self.image_visual.clim = (vmin, vmax)
+        self.image_visual.cmap = self.current_cmap
+
+        # Adapt canvas background to current theme
         current_theme = self.theme_manager.get_current_theme()
-        if current_theme == 'dark':
-            title_color = 'white'
-            bg_color = 'black'
-        else:
-            title_color = 'black'
-            bg_color = 'white'
+        bg_color = 'black' if current_theme == 'dark' else 'white'
+        self.canvas.bgcolor = bg_color
 
-        self.ax.set_title(title, pad=15, fontsize=16, fontweight='bold', color=title_color)
-        self.ax.set_facecolor(bg_color)
-        self.fig.patch.set_facecolor(bg_color)
-
-        self.ax.set_aspect('equal', adjustable='box')  # square pixels; obey zoom limits without warnings
+        # Handle zoom with camera rect
         if (self._keep_zoom and
             self._last_image_shape == (h, w) and
-            self._last_xlim is not None and
-            self._last_ylim is not None):
-            self.ax.set_xlim(self._last_xlim)
-            self.ax.set_ylim(self._last_ylim)
+            self._last_camera_rect is not None):
+            self.view.camera.rect = self._last_camera_rect
         else:
-            left, right, bottom, top = im.get_extent()
-            self.ax.set_xlim(left, right)
-            self.ax.set_ylim(bottom, top)
+            self.view.camera.rect = (0, 0, w, h)
 
-        self.canvas.draw_idle()
-
-        self._last_xlim = self.ax.get_xlim()
-        self._last_ylim = self.ax.get_ylim()
+        self._last_camera_rect = self.view.camera.rect
         self._last_image_shape = (h, w)
+
+        self.canvas.update()
 
 
 
     def _remember_view(self):
         """Record current view so the next image keeps the same zoom/pan."""
         try:
-            self._last_xlim = self.ax.get_xlim()
-            self._last_ylim = self.ax.get_ylim()
-            if self._current_img is not None:
-                self._last_image_shape = self._current_img.shape
+            if hasattr(self, 'view'):
+                self._last_camera_rect = self.view.camera.rect
+                if self._current_img is not None:
+                    self._last_image_shape = self._current_img.shape
         except Exception:
             pass
-
-    def _nav_oneshot_release(self, event):
-        """After a zoom-rect or pan ends, remember view and auto-disable the tool."""
-        if event.inaxes != self.ax:
-            return
-        try:
-            if event.button != MouseButton.LEFT:
-                return
-        except Exception:
-            pass
-
-        mode = getattr(self.toolbar, "mode", "")
-        if mode in ("zoom rect", "pan/zoom"):
-            self._remember_view()
-            self._keep_zoom = True
-
-            try:
-                if mode == "zoom rect":
-                    self.toolbar.zoom()
-                else:
-                    self.toolbar.pan()
-            except Exception:
-                pass
-
-            try:
-                self.toolbar.set_message("")
-            except Exception:
-                pass
-            try:
-                self.canvas.setCursor(Qt.ArrowCursor)
-            except Exception:
-                pass
 
     def _reset_view_state(self):
         """Forget any prior zoom/pan so the next image shows full frame."""
-        try:
-            mode = getattr(self.toolbar, "mode", "")
-            if mode == "zoom rect":
-                self.toolbar.zoom()
-            elif mode == "pan/zoom":
-                self.toolbar.pan()
-            try:
-                self.toolbar.set_message("")
-            except Exception:
-                pass
-        except Exception:
-            pass
-
         self._keep_zoom = False
-        self._last_xlim = None
-        self._last_ylim = None
-        self._last_image_shape = None
-
-
-    def _on_toolbar_home(self):
-        # forget any persisted zoom so the next slice uses full extents
-        self._keep_zoom = False
-        self._last_xlim = None
-        self._last_ylim = None
+        self._last_camera_rect = None
         self._last_image_shape = None
 
 
@@ -3671,6 +3686,25 @@ class TomoGUI(QWidget):
              QMessageBox.critical(self, "Error", f"Failed to open HDF5 viewer:\n{str(e)}")
              self.log_output.append(f'<span style="color:red;">❌ Failed to open HDF5 viewer: {str(e)}</span>')
 
+    def _batch_view_selected_data(self):
+        """Open HDF5 viewer for the first selected file"""
+        selected_files = []
+        for file_info in self.batch_file_main_list:
+            if file_info['checkbox'].isChecked():
+                selected_files.append(file_info['path'])
+
+        if not selected_files:
+            QMessageBox.warning(self, "No Selection", "Please select at least one file to view.")
+            self.log_output.append('<span style="color:orange;">⚠️  No files selected for viewing</span>')
+            return
+
+        # Open viewer for the first selected file
+        first_file = selected_files[0]
+        self._batch_view_data(first_file)
+
+        if len(selected_files) > 1:
+            self.log_output.append(f'<span style="color:blue;">ℹ️  {len(selected_files)} files selected, opened first: {os.path.basename(first_file)}</span>')
+
     # def _batch_view_try(self, file_path):
     #     """View try reconstruction for a specific file"""
     #     # Set the file in the main dropdown
@@ -4215,9 +4249,15 @@ class TomoGUI(QWidget):
         else:
             self.theme_toggle_btn.setText("☀")
 
-        # Redraw the matplotlib canvas with new theme
-        if hasattr(self, 'canvas') and self.canvas:
-            self.canvas.draw_idle()
+        # Update vispy canvas background
+        if hasattr(self, 'canvas'):
+            bg_color = 'black' if theme_name == 'dark' else 'white'
+            self.canvas.bgcolor = bg_color
+            self.canvas.update()
+
+        # Refresh current image if available
+        if self._current_img is not None:
+            self.refresh_current_image()
 
 
 if __name__ == "__main__":

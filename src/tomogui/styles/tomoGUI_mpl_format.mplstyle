@@ -1,2 +1,0 @@
-backend: QtAgg
-backend_fallback: False
