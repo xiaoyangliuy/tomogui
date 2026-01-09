@@ -3938,6 +3938,7 @@ class TomoGUI(QWidget):
         """
         Run batch reconstructions with GPU queue management
         """
+        self.log_output.append(f'<span style="color:magenta;">🔍 DEBUG: Starting {recon_type} batch, batch_running={self.batch_running}</span>')
 
         jobs_to_add = [(f, recon_type, machine) for f in selected_files]
 
@@ -4126,6 +4127,10 @@ class TomoGUI(QWidget):
             self.progress_window.batch_queue_label.setText("Queue: 0 jobs waiting")
 
         self.log_output.append(f'<span style="color:green;">🏁 Batch queue finished: {self.batch_completed_jobs} files completed</span>')
+
+        # Reset batch running flag so new batches can start
+        self.batch_running = False
+        self.log_output.append('<span style="color:blue;">✅ batch_running set to False, ready for new batch</span>')
 
 
     def _batch_stop_queue(self):
