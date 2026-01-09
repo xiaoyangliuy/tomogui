@@ -1,5 +1,16 @@
 import os, glob, json
 import numpy as np
+
+# Configure OpenGL for remote display BEFORE importing VisPy
+# This helps with SSH X11 forwarding and remote displays
+if 'LIBGL_ALWAYS_SOFTWARE' not in os.environ:
+    os.environ['LIBGL_ALWAYS_SOFTWARE'] = '1'
+if 'MESA_GL_VERSION_OVERRIDE' not in os.environ:
+    os.environ['MESA_GL_VERSION_OVERRIDE'] = '3.3'
+# Disable vsync for better remote performance
+if 'vblank_mode' not in os.environ:
+    os.environ['vblank_mode'] = '0'
+
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QFileDialog, QTextEdit, QLineEdit, QLabel, QProgressBar,
@@ -17,9 +28,14 @@ from datetime import datetime
 
 # VisPy for fast GPU-accelerated rendering
 try:
-    from vispy import scene
+    from vispy import scene, app
     from vispy.scene import visuals
     from vispy.color import get_colormaps
+    # Use Qt5 backend which is most stable
+    try:
+        app.use_app('pyqt5')
+    except:
+        pass
     VISPY_AVAILABLE = True
 except ImportError:
     print("Warning: VisPy not available. Install with: pip install vispy")
@@ -413,7 +429,26 @@ class TomoGUI(QWidget):
             return
 
         # VisPy canvas setup
-        self.canvas = scene.SceneCanvas(keys='interactive', show=False)
+        try:
+            self.canvas = scene.SceneCanvas(keys='interactive', show=False)
+        except Exception as e:
+            # If canvas creation fails, show error and provide workaround
+            error_label = QLabel(
+                f"ERROR: VisPy canvas creation failed!\n\n"
+                f"Error: {str(e)}\n\n"
+                f"If using SSH/remote display, try:\n"
+                f"  export LIBGL_ALWAYS_SOFTWARE=1\n"
+                f"  export MESA_GL_VERSION_OVERRIDE=3.3\n"
+                f"Then restart tomogui"
+            )
+            error_label.setStyleSheet("color: red; font-size: 11pt; padding: 20px;")
+            error_label.setAlignment(Qt.AlignCenter)
+            error_label.setWordWrap(True)
+            toolbar_row.addWidget(error_label)
+            right_layout.addLayout(toolbar_row)
+            main_layout.addLayout(right_layout, 8)
+            self.setLayout(main_layout)
+            return
         self.view = self.canvas.central_widget.add_view()
         self.view.camera = scene.PanZoomCamera()
         self.view.camera.flip = (False, True, False)  # Flip Y for image coords
@@ -3906,12 +3941,21 @@ class TomoGUI(QWidget):
         self.batch_total_jobs = len(selected_files)
         self.batch_completed_jobs = 0
 
+        self.log_output.append(
+            f'<span style="color:blue;">🚀 Starting batch queue: {len(self.batch_job_queue)} jobs, {num_gpus} GPU(s)</span>'
+        )
+
         QApplication.processEvents()
 
         progress_window_opened = False  #gate progress window
 
         # Keep processing until queue is empty and all jobs are done
         while self.batch_job_queue or self.batch_running_jobs:
+            self.log_output.append(
+                f'<span style="color:gray;">🔄 Queue loop: {len(self.batch_job_queue)} queued, {len(self.batch_running_jobs)} running, {len(self.batch_available_gpus)} GPUs available</span>'
+            )
+            QApplication.processEvents()
+
             # Start new jobs if GPUs are available and jobs are queued
             while self.batch_available_gpus and self.batch_job_queue:
                 gpu_id = self.batch_available_gpus.pop(0)
@@ -3989,14 +4033,22 @@ class TomoGUI(QWidget):
 
                     try:
                         if exit_code == 0:
+                            # Set status based on reconstruction type
+                            if job_recon_type == 'try':
+                                status_text = "Done try"
+                                status_color = "orange"
+                            else:  # full
+                                status_text = "Done full"
+                                status_color = "green"
+
                             self._set_status_by_filename(
                                 os.path.basename(file_info["filename"]),
-                                f"Done try",
+                                status_text,
                                 status_col=3,
                                 filename_col=1,
-                                color="orange"
+                                color=status_color
                             )
-                            self.log_output.append(f'<span style="color:green;">✅ GPU {gpu_id} finished: {file_info["filename"]}</span>')
+                            self.log_output.append(f'<span style="color:green;">✅ GPU {gpu_id} finished {job_recon_type}: {file_info["filename"]}</span>')
                         else:
                             self._set_status_by_filename(
                                 os.path.basename(file_info["filename"]),
@@ -4005,7 +4057,7 @@ class TomoGUI(QWidget):
                                 filename_col=1,
                                 color="red"
                             )
-                            self.log_output.append(f'<span style="color:red;">❌ GPU {gpu_id} failed: {file_info["filename"]}</span>')
+                            self.log_output.append(f'<span style="color:red;">❌ GPU {gpu_id} failed {job_recon_type}: {file_info["filename"]}</span>')
                     except RuntimeError:
                         self.log_output.append(
                             f'<span style="color:gray;">✅ GPU {gpu_id} finished: {file_info["filename"]} (widget deleted)</span>'
@@ -4232,6 +4284,17 @@ class TomoGUI(QWidget):
 
         # Start process
         p.start(str(cmd[0]), [str(a) for a in cmd[1:]])
+
+        # Wait a moment for process to actually start
+        if not p.waitForStarted(5000):  # Wait up to 5 seconds
+            self.log_output.append(
+                f'<span style="color:red;">❌ Process failed to start for {filename}</span>'
+            )
+            return None
+
+        self.log_output.append(
+            f'<span style="color:blue;">✓ Process started successfully for {filename} (PID: {p.processId()})</span>'
+        )
         return p
 
 
