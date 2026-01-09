@@ -3992,16 +3992,17 @@ class TomoGUI(QWidget):
                         pass
                     continue  # <<< CHANGED: continue queue
 
-                if process is None or not isinstance(process, QProcess):  # <<< CHANGED
-                    self.log_output.append(
-                        f'<span style="color:red;">❌ _start_batch_job_async did not return QProcess for {file_info.get("filename","?")}</span>'
-                    )
+                if process is None or not isinstance(process, QProcess):
+                    # Process is None when job is skipped (e.g., missing COR)
+                    # The specific reason was already logged in _start_batch_job_async
                     self.batch_available_gpus.append(gpu_id)
                     self.batch_available_gpus.sort()
                     try:
-                        self._set_status_by_filename(os.path.basename(file_info["filename"]), "Start Failed", 3, 1, color="red")
+                        self._set_status_by_filename(os.path.basename(file_info["filename"]), "Skipped", 3, 1, color="gray")
                     except RuntimeError:
                         pass
+                    # Count as completed to keep progress accurate
+                    self.batch_completed_jobs += 1
                     continue
 
                 # open progress window ONLY after first process starts successfully
@@ -4194,11 +4195,8 @@ class TomoGUI(QWidget):
                 self.log_output.append(
                     f'<span style="color:orange;">⚠️ No COR value in batch table for {filename}, skipping</span>'
                 )
-                # Return a finished dummy process so queue advances cleanly
-                p = QProcess(self)
-                p.start("echo", ["skipped"])
-                p.waitForFinished()
-                return p
+                # Return None to skip this job - queue will handle it
+                return None
 
             try:
                 cor = float(cor_val)
@@ -4206,10 +4204,8 @@ class TomoGUI(QWidget):
                 self.log_output.append(
                     f'<span style="color:red;">❌ Invalid COR value "{cor_val}" for {filename}, skipping</span>'
                 )
-                p = QProcess(self)
-                p.start("echo", ["skipped"])
-                p.waitForFinished()
-                return p
+                # Return None to skip this job - queue will handle it
+                return None
         else:
             self.log_output.append(
                 f'<span style="color:red;">❌ Unknown recon_type "{recon_type}"</span>'
