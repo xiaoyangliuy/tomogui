@@ -1,4 +1,4 @@
-import os, glob, json,time
+import os, glob, json
 import numpy as np
 
 # Configure OpenGL for remote display BEFORE importing VisPy
@@ -4016,7 +4016,6 @@ class TomoGUI(QWidget):
                 f'<span style="color:gray;">🔄 Queue loop: {len(self.batch_job_queue)} queued, {len(self.batch_running_jobs)} running, {len(self.batch_available_gpus)} GPUs available</span>'
             )
             QApplication.processEvents()
-            time.sleep(2) #less print in log
 
             # Start new jobs if GPUs are available and jobs are queued
             while self.batch_available_gpus and self.batch_job_queue:
