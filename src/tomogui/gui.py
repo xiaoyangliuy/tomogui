@@ -457,7 +457,6 @@ class TomoGUI(QWidget):
         self.canvas_widget = self.canvas.native
 
         # State for vispy
-        self._keep_zoom = False
         self._last_camera_rect = None
         self._last_image_shape = None
         self.roi_extent = None
@@ -1958,7 +1957,6 @@ class TomoGUI(QWidget):
             step = 1 if event.angleDelta().y() > 0 else -1
             new_val = self.slice_slider.value() + step
             new_val = max(0, min(self.slice_slider.maximum(), new_val))
-            self._keep_zoom = True
             self.slice_slider.setValue(new_val)
             return True
         return super().eventFilter(obj, event)
@@ -2784,7 +2782,6 @@ class TomoGUI(QWidget):
         if not self.preview_files:
             self.log_output.append(f'<span style="color:red;">\u274cNo try folder</span>')
             return
-        self._keep_zoom = False
         self._clear_roi()
         self._reset_view_state()
         self.set_image_scale(self.preview_files[0])
@@ -2795,8 +2792,8 @@ class TomoGUI(QWidget):
         self.slice_slider.setMaximum(len(self.preview_files) - 1)
         self.slice_slider.valueChanged.connect(self.update_try_slice)
         # Store the source filename for display
-        self._current_source_file = os.path.basename(proj_file)
-        self._current_view_mode = "try"
+        #self._current_source_file = os.path.basename(proj_file)
+        #self._current_view_mode = "try"
         self.update_try_slice()  
 
     def view_full_reconstruction(self):
@@ -2809,7 +2806,6 @@ class TomoGUI(QWidget):
         if not self.full_files:
             self.log_output.append(f'<span style="color:red;">\u26a0\ufe0f No full reconstruction images found</span>')
             return
-        self._keep_zoom = False
         self._clear_roi()
         self._reset_view_state()
         self.set_image_scale(self.full_files[0])
@@ -3004,24 +3000,28 @@ class TomoGUI(QWidget):
             self.max_input.setText(str(self.vmax))
             if VISPY_AVAILABLE and self._current_img is not None:
                 self.image_visual.clim = (self.vmin, self.vmax)
+                h, w = self._current_img.shape
+                self.view.camera.rect = (0, 0, w, h)   # reset pan+zoom
+                self._last_camera_rect = None
+                self._last_image_shape = None
                 self.canvas.update()
             else:
                 self.refresh_current_image()
 
     def update_raw_slice(self):
-        self._keep_zoom = True
+        self._remember_view()
         idx = self.slice_slider.value()
         if 0 <= idx < self.raw_files_num:
             self.show_image(img_path=idx, flag="raw")
 
     def update_try_slice(self):
-        self._keep_zoom = True
+        self._remember_view()
         idx = self.slice_slider.value()
         if 0 <= idx < len(self.preview_files):
             self.show_image(self.preview_files[idx], flag=None)
 
     def update_full_slice(self):
-        self._keep_zoom = True
+        self._remember_view()
         idx = self.slice_slider.value()
         if 0 <= idx < len(self.full_files):
             self.show_image(self.full_files[idx], flag=None)
@@ -3072,8 +3072,7 @@ class TomoGUI(QWidget):
         self.canvas.bgcolor = bg_color
 
         # Handle zoom with camera rect
-        if (self._keep_zoom and
-            self._last_image_shape == (h, w) and
+        if (self._last_image_shape == (h, w) and
             self._last_camera_rect is not None):
             self.view.camera.rect = self._last_camera_rect
         else:
@@ -3098,7 +3097,6 @@ class TomoGUI(QWidget):
 
     def _reset_view_state(self):
         """Forget any prior zoom/pan so the next image shows full frame."""
-        self._keep_zoom = False
         self._last_camera_rect = None
         self._last_image_shape = None
 
