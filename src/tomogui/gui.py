@@ -497,10 +497,10 @@ class TomoGUI(QWidget):
         draw_box_btn = QPushButton("Draw")
         draw_box_btn.setStyleSheet("font-size: 11pt;")
         draw_box_btn.clicked.connect(self.draw_box)
-        draw_box_btn.setFixedWidth(55)
+        draw_box_btn.setFixedWidth(57)
         auto_scale_btn = QPushButton("Auto")
         auto_scale_btn.setStyleSheet("font-size: 11pt;")
-        auto_scale_btn.setFixedWidth(55)
+        auto_scale_btn.setFixedWidth(57)
         auto_scale_btn.clicked.connect(self.auto_img_contrast)
         reset_scale_btn = QPushButton("Reset")
         reset_scale_btn.setStyleSheet("font-size: 11pt;")
@@ -2780,6 +2780,7 @@ class TomoGUI(QWidget):
         try_dir = os.path.join(f"{data_folder}_rec", "try_center", proj_name)
         self.preview_files = [] #clean it before use
         self.preview_files = sorted(glob.glob(os.path.join(try_dir, "*.tiff")))
+        self.log_output.append(f"first: {self.preview_files[0]}; last: {self.preview_files[-1]}")
         if not self.preview_files:
             self.log_output.append(f'<span style="color:red;">\u274cNo try folder</span>')
             return
@@ -2803,8 +2804,8 @@ class TomoGUI(QWidget):
         proj_file = self.highlight_scan
         proj_name = os.path.splitext(os.path.basename(proj_file))[0]
         full_dir = os.path.join(f"{data_folder}_rec", f"{proj_name}_rec")
-
         self.full_files = sorted(glob.glob(os.path.join(full_dir, "*.tiff")))
+        self.log_output.append(f"first: {self.full_files[0]}; last: {self.full_files[-1]}")
         if not self.full_files:
             self.log_output.append(f'<span style="color:red;">\u26a0\ufe0f No full reconstruction images found</span>')
             return
