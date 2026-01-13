@@ -3779,7 +3779,8 @@ class TomoGUI(QWidget):
     def _select_done_try(self):
         found = False
         for file_info in self.batch_file_main_list:
-            if file_info['status'] == "Done try":
+            status = file_info['status'].text().strip()
+            if status == "Done try":
                 file_info['checkbox'].setChecked(True)
                 found = True
         if not found:
