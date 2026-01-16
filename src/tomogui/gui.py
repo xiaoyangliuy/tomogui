@@ -16,7 +16,8 @@ from PyQt5.QtWidgets import (
     QFileDialog, QTextEdit, QLineEdit, QLabel, QProgressBar,
     QComboBox, QSlider, QGroupBox, QSizePolicy, QMessageBox,
     QTabWidget, QFormLayout, QCheckBox, QSpinBox, QDoubleSpinBox,
-    QScrollArea, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,QFrame
+    QScrollArea, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,QFrame,
+    QDialog
 )
 from PyQt5.QtCore import Qt, QEvent, QProcess, QEventLoop, QSize, QProcessEnvironment
 from PyQt5.QtGui import QColor
@@ -47,6 +48,103 @@ from .hdf5_viewer import HDF5ImageDividerDialog
 from .batch_progress_window import ProgressWindow
 
 
+class MachineSettingsDialog(QDialog):
+    """Dialog for configuring remote machine settings"""
+
+    def __init__(self, parent=None, config=None):
+        super().__init__(parent)
+        self.setWindowTitle("Remote Machine Settings")
+        self.setMinimumWidth(500)
+        self.config = config or {}
+        self._init_ui()
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+
+        # Info label
+        info = QLabel(
+            "Configure remote machines for batch reconstruction.\n"
+            "Leave username empty to use current system username.\n"
+            "Conda environment defaults to 'tomocupy' if not specified."
+        )
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        # Form for each machine
+        form = QFormLayout()
+        self.machine_inputs = {}
+
+        machines = ["tomo1", "tomo2", "tomo3", "tomo4", "tomo5"]
+        for machine in machines:
+            # Get existing config or use defaults
+            machine_config = self.config.get(machine, {})
+            username = machine_config.get("username", "")
+            hostname = machine_config.get("hostname", machine)
+            conda_env = machine_config.get("conda_env", "tomocupy")
+
+            # Create row widget
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+
+            user_input = QLineEdit(username)
+            user_input.setPlaceholderText("username")
+            user_input.setFixedWidth(100)
+
+            host_input = QLineEdit(hostname)
+            host_input.setPlaceholderText("hostname or IP")
+            host_input.setFixedWidth(150)
+
+            conda_input = QLineEdit(conda_env)
+            conda_input.setPlaceholderText("tomocupy")
+            conda_input.setFixedWidth(100)
+
+            row_layout.addWidget(QLabel("User:"))
+            row_layout.addWidget(user_input)
+            row_layout.addWidget(QLabel("Host:"))
+            row_layout.addWidget(host_input)
+            row_layout.addWidget(QLabel("Env:"))
+            row_layout.addWidget(conda_input)
+            row_layout.addStretch()
+
+            self.machine_inputs[machine] = {
+                "username": user_input,
+                "hostname": host_input,
+                "conda_env": conda_input
+            }
+
+            form.addRow(f"{machine}:", row)
+
+        layout.addLayout(form)
+
+        # Buttons
+        button_box = QHBoxLayout()
+        save_btn = QPushButton("Save")
+        save_btn.clicked.connect(self.accept)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+
+        button_box.addStretch()
+        button_box.addWidget(save_btn)
+        button_box.addWidget(cancel_btn)
+        layout.addLayout(button_box)
+
+    def get_config(self):
+        """Return the configuration dictionary"""
+        config = {}
+        for machine, inputs in self.machine_inputs.items():
+            username = inputs["username"].text().strip()
+            hostname = inputs["hostname"].text().strip()
+            conda_env = inputs["conda_env"].text().strip()
+            if hostname:  # Only include if hostname is provided
+                config[machine] = {
+                    "username": username or os.getenv("USER", ""),
+                    "hostname": hostname,
+                    "conda_env": conda_env or "tomocupy"
+                }
+        return config
+
+
 class TomoGUI(QWidget):
     def __init__(self):
         super().__init__()
@@ -61,6 +159,9 @@ class TomoGUI(QWidget):
         self.progress_window = ProgressWindow(self)
         #stop button in progress window stops the same batch queue
         self.progress_window.stop_requested.connect(self._batch_stop_queue)
+
+        # Load machine configuration
+        self.machine_config = self._load_machine_config()
 
         # State
         self.default_cmap = "gray"
@@ -315,11 +416,10 @@ class TomoGUI(QWidget):
         batch_mach_label.setFixedWidth(59)
         batch_ops.addWidget(batch_mach_label)
         self.batch_machine_box = QComboBox()
-        self.batch_machine_box.addItems(["Local", "tomo1", "tomo2", "tomo3", "tomo4", "tomo5"])
         self.batch_machine_box.setStyleSheet("QComboBox { font-size: 10.5pt; }")
-        self.batch_machine_box.setCurrentText("Local") # make Local as default TODO: set initial json file beamline dependent
         self.batch_machine_box.setToolTip("Select machine to run batch reconstructions")
         self.batch_machine_box.setFixedWidth(62)
+        self._populate_machine_list()  # Populate dynamically from config
         batch_ops.addWidget(self.batch_machine_box)
         batch_gpus = QLabel("GPUs")
         batch_gpus.setStyleSheet("QLabel { font-size: 10.5pt; }")
@@ -333,6 +433,14 @@ class TomoGUI(QWidget):
         self.batch_gpus_per_machine.setFixedWidth(38)
         self.batch_gpus_per_machine.setStyleSheet("QSpinBox { font-size: 10.5pt; }")
         batch_ops.addWidget(self.batch_gpus_per_machine)
+
+        # Checkbox for opening remote jobs in terminal
+        self.batch_use_terminal = QCheckBox("Terminal")
+        self.batch_use_terminal.setToolTip("Open remote jobs in separate terminal windows")
+        self.batch_use_terminal.setChecked(False)
+        self.batch_use_terminal.setStyleSheet("QCheckBox { font-size: 10.5pt; }")
+        batch_ops.addWidget(self.batch_use_terminal)
+
         #TODO: monitor folder and auto recon
         #monitor_btn = QPushButton("Monitor")
         #monitor_btn.setStyleSheet("QPushButton { font-size: 10.5pt; }")
@@ -541,6 +649,13 @@ class TomoGUI(QWidget):
         self.theme_toggle_btn.setToolTip("Toggle bright/dark theme")
         self.theme_toggle_btn.clicked.connect(self._toggle_theme)
         toolbar_row.addWidget(self.theme_toggle_btn)
+
+        # Settings button
+        settings_btn = QPushButton("⚙")
+        settings_btn.setFixedWidth(35)
+        settings_btn.setToolTip("Configure remote machine settings")
+        settings_btn.clicked.connect(self._open_machine_settings)
+        toolbar_row.addWidget(settings_btn)
 
         toolbar_row.addStretch(1)
         right_layout.addLayout(toolbar_row)
@@ -2706,13 +2821,30 @@ class TomoGUI(QWidget):
         if machine == "Local":
             return cmd
 
-        # Build SSH command to execute on remote machine
-        # Assumes SSH keys are set up for passwordless login
+        # Get machine configuration
+        machine_config = self.machine_config.get(machine, {})
+        username = machine_config.get("username", os.getenv("USER", ""))
+        hostname = machine_config.get("hostname", machine)
+        conda_env = machine_config.get("conda_env", "tomocupy")
+
+        # Build SSH target
+        if username:
+            ssh_target = f"{username}@{hostname}"
+        else:
+            ssh_target = hostname
+
+        # Build command with conda activation
         # Properly quote arguments for shell execution
         remote_cmd = " ".join([f'"{str(arg)}"' if " " in str(arg) else str(arg) for arg in cmd])
 
-        # Use SSH to execute the command on the remote machine
-        ssh_cmd = ["ssh", machine, remote_cmd]
+        # Wrap command with conda activation
+        full_cmd = f"bash -l -c 'source ~/.bashrc && conda activate {conda_env} && {remote_cmd}'"
+
+        # Use SSH with terminal (-t) to execute the command on the remote machine
+        # -t forces pseudo-terminal allocation for better output handling
+        ssh_cmd = ["ssh", "-t", ssh_target, full_cmd]
+
+        self.log_output.append(f'<span style="color:gray;">🔗 SSH: {ssh_target} (env: {conda_env})</span>')
 
         return ssh_cmd
 
@@ -4350,9 +4482,31 @@ class TomoGUI(QWidget):
         # <<< FIX: assign wrapped cmd (previously return value was ignored)
         cmd = self._get_batch_machine_command(cmd, machine)  # <<< FIX
 
+        # Check if user wants terminal window for remote jobs
+        use_terminal = self.batch_use_terminal.isChecked() and machine != "Local"
+
+        if use_terminal:
+            # Open in separate terminal window (xterm, gnome-terminal, etc.)
+            # Use xterm with -hold to keep window open after completion
+            terminal_cmd = ["xterm", "-hold", "-title", f"Reconstruction: {filename}", "-e"] + cmd
+            cmd = terminal_cmd
+
         # Create and configure process
         p = QProcess(self)
-        p.setProcessChannelMode(QProcess.ForwardedChannels)
+
+        if use_terminal:
+            # Terminal handles output display, just need basic channel mode
+            p.setProcessChannelMode(QProcess.ForwardedChannels)
+        else:
+            # Capture output to display in log
+            p.setProcessChannelMode(QProcess.SeparateChannels)
+            # Connect output signals to display in log
+            p.readyReadStandardOutput.connect(
+                lambda proc=p, fn=filename: self._on_process_output(proc, fn, is_error=False)
+            )
+            p.readyReadStandardError.connect(
+                lambda proc=p, fn=filename: self._on_process_output(proc, fn, is_error=True)
+            )
 
         # Set CUDA_VISIBLE_DEVICES for GPU assignment (local only)
         if machine == "Local":
@@ -4374,6 +4528,27 @@ class TomoGUI(QWidget):
             f'<span style="color:blue;">✓ Process started successfully for {filename} (PID: {p.processId()})</span>'
         )
         return p
+
+    def _on_process_output(self, process, filename, is_error=False):
+        """Handle stdout/stderr from batch reconstruction processes"""
+        if is_error:
+            data = bytes(process.readAllStandardError()).decode(errors="ignore")
+            color = "orange"
+            prefix = "⚠️"
+        else:
+            data = bytes(process.readAllStandardOutput()).decode(errors="ignore")
+            color = "gray"
+            prefix = "▸"
+
+        if data.strip():
+            # Show output in log with filename context
+            basename = os.path.basename(filename)
+            lines = data.strip().split('\n')
+            for line in lines:
+                if line.strip():
+                    self.log_output.append(
+                        f'<span style="color:{color};">{prefix} [{basename}] {line}</span>'
+                    )
 
 
     # ===== THEME METHODS =====
@@ -4399,6 +4574,63 @@ class TomoGUI(QWidget):
         # Refresh current image if available
         if self._current_img is not None:
             self.refresh_current_image()
+
+    # ===== MACHINE CONFIGURATION METHODS =====
+
+    def _get_config_path(self):
+        """Get path to machine configuration file"""
+        config_dir = os.path.expanduser("~/.tomogui")
+        os.makedirs(config_dir, exist_ok=True)
+        return os.path.join(config_dir, "machine_config.json")
+
+    def _load_machine_config(self):
+        """Load machine configuration from file"""
+        config_path = self._get_config_path()
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    return json.load(f)
+            except Exception as e:
+                print(f"Warning: Could not load machine config: {e}")
+        return {}
+
+    def _save_machine_config(self, config):
+        """Save machine configuration to file"""
+        config_path = self._get_config_path()
+        try:
+            with open(config_path, 'w') as f:
+                json.dump(config, f, indent=2)
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Could not save machine config: {e}")
+
+    def _populate_machine_list(self):
+        """Populate the machine dropdown with Local + configured machines"""
+        current = self.batch_machine_box.currentText()
+        self.batch_machine_box.clear()
+
+        # Always include Local
+        machines = ["Local"]
+
+        # Add configured machines
+        if self.machine_config:
+            machines.extend(sorted(self.machine_config.keys()))
+
+        self.batch_machine_box.addItems(machines)
+
+        # Restore previous selection if it still exists
+        if current and current in machines:
+            self.batch_machine_box.setCurrentText(current)
+        else:
+            self.batch_machine_box.setCurrentText("Local")
+
+    def _open_machine_settings(self):
+        """Open the machine settings dialog"""
+        dialog = MachineSettingsDialog(self, self.machine_config)
+        if dialog.exec_() == QDialog.Accepted:
+            self.machine_config = dialog.get_config()
+            self._save_machine_config(self.machine_config)
+            self._populate_machine_list()  # Refresh the dropdown
+            self.log_output.append('<span style="color:green;">✓ Machine settings saved</span>')
 
 
 if __name__ == "__main__":
