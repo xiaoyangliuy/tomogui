@@ -921,6 +921,12 @@ class TomoGUI(QWidget):
         bhard_tab = QWidget()
         outer = QVBoxLayout(bhard_tab)
 
+        #check all button
+        ca_layout = QHBoxLayout()
+        ca_button = QPushButton("Check all")
+        ca_layout.addWidget(ca_button)
+        outer.addLayout(ca_layout)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         form_host = QWidget()
@@ -1024,11 +1030,18 @@ class TomoGUI(QWidget):
                 w.setToolTip(tip)
             _add_row(flag, "dspin", w, default=default, include=include)
 
+        def check_all():
+            for flag, (kind, w, include_cb, default) in self.bhard_widgets.items():
+                if include_cb is not None:
+                    include_cb.setChecked(True)
+        
+        ca_button.clicked.connect(check_all)
+
         # Beam hardening / source & scintillator
         add_combo("--beam-hardening-method", ["none","standard"], default="none")
         add_combo("--calculate-source", ["none","standard"], default="none")
-        add_dspin("--b-storage-ring", 0.0, 10.0, step=0.001, default=0.599)
-        add_dspin("--e-storage-ring", 0.0, 50.0, step=0.1, default=7.0)
+        add_dspin("--b-storage-ring", 0.0, 10.0, step=0.001, default=0.653)
+        add_dspin("--e-storage-ring", 0.0, 50.0, step=0.1, default=6.0)
         add_combo("--filter-1-auto", ["False","True"], default="False")
         add_dspin("--filter-1-density", 0.0, 100.0, step=0.01, default=1.0)
         add_line("--filter-1-material", "none/Al/Cu/...")
