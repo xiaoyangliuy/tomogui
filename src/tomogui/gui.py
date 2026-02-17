@@ -322,11 +322,11 @@ class TomoGUI(QWidget):
         self.cuda_full_box.setFixedWidth(52)
         self.cuda_full_box.setStyleSheet("QSpinBox { font-size: 10.5pt; }")
         single_full_ops.addWidget(self.cuda_full_box) 
-        full_btn = QPushButton("    Full    ")
-        full_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        full_btn.setStyleSheet("QPushButton { font-size: 11pt; font-weight:bold; }")
-        full_btn.clicked.connect(self.full_reconstruction)
-        single_full_ops.addWidget(full_btn)
+        self.full_btn = QPushButton("    Full    ")
+        self.full_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.full_btn.setStyleSheet("QPushButton { font-size: 11pt; font-weight:bold; }")
+        self.full_btn.clicked.connect(self.full_reconstruction)
+        single_full_ops.addWidget(self.full_btn)
         self.view_btn = QPushButton("  View Full  ")
         self.view_btn.setStyleSheet("QPushButton { font-size: 10.5pt; }")
         self.view_btn.setEnabled(True)
@@ -591,6 +591,17 @@ class TomoGUI(QWidget):
         self.coord_label.setFixedWidth(150)
         self.coord_label.setStyleSheet("font-size: 11pt;")
         toolbar_row.addWidget(self.coord_label)
+
+        #slice number
+        slice_label = QLabel("z: ")
+        slice_label.setFixedWidth(30)
+        slice_label.setStyleSheet("font-size: 11pt;")
+        toolbar_row.addWidget(slice_label)
+        self.slice_num = QLabel("")
+        self.slice_num.setFixedWidth(70)
+        self.slice_num.setStyleSheet("font-size: 11pt;")
+        toolbar_row.addWidget(self.slice_num)
+
 
         # Colormap dropdown
         cmap_label = QLabel(" Cmap ")
@@ -2735,6 +2746,7 @@ class TomoGUI(QWidget):
                     self.log_output.append(f'<span style="color:red;">\u26a0\ufe0f Could not remove {temp_try}: {e}</span>')
 
     def full_reconstruction(self):
+        self.full_btn.setEnabled(False)
         proj_file = self.highlight_scan
         pn = os.path.splitext(os.path.basename(proj_file))[0]
         recon_way = self.recon_way_box_full.currentText()  
@@ -2806,7 +2818,7 @@ class TomoGUI(QWidget):
                         self.log_output.append(f"\U0001f9f9 Removed {temp_full}")
                 except Exception as e:
                     self.log_output.append(f'<span style="color:red;">\u26a0\ufe0f Could not remove {temp_full}: {e}</span>')
-
+        self.full_btn.setEnabled(True)
     #=============Batch OPERATIONS==================
     def _batch_select_all(self):
         """Select all files in the batch list"""
@@ -3170,13 +3182,16 @@ class TomoGUI(QWidget):
         self._remember_view()
         if 0 <= idx < len(self.preview_files):
             self.show_image(self.preview_files[idx], flag=None)
-        
+            z = self.preview_files[idx].split('_')[-1].split('.')[0]
+            self.slice_num.setText(z)
 
     def update_full_slice(self):
         idx = self.slice_slider.value()
         self._remember_view()
         if 0 <= idx < len(self.full_files):
             self.show_image(self.full_files[idx], flag=None)
+            z = self.full_files[idx].split('_')[-1].split('.')[0]
+            self.slice_num.setText(z)
         
 
     def _safe_open_image(self, path, flag=None, retries=3): 
