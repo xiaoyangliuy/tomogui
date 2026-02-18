@@ -2187,7 +2187,12 @@ class TomoGUI(QWidget):
         if os.path.exists(json_path):
             try:
                 with open(json_path, 'r') as f:
-                    cor_data = json.load(f)
+                    raw = json.load(f)
+                    # Normalise: values may be lists [cor] or bare numbers/strings
+                    cor_data = {
+                        k: str(v[0]) if isinstance(v, list) and v else str(v)
+                        for k, v in raw.items()
+                    }
                     self.log_output.append(f'<span style="color:green;">✅ Loaded {len(cor_data)} COR values from rot_cen.json</span>')
                     return cor_data, list(cor_data.keys())
             except json.JSONDecodeError as e:
@@ -2273,7 +2278,12 @@ class TomoGUI(QWidget):
 
             # COR value (editable)
             if f in fns:
-                cor_input = QLineEdit(self.cor_data[f])
+                cor_val = self.cor_data[f]
+                if isinstance(cor_val, list):
+                    cor_val = str(cor_val[0]) if cor_val else ""
+                else:
+                    cor_val = str(cor_val)
+                cor_input = QLineEdit(cor_val)
             else:
                 cor_input = QLineEdit()
             cor_input.setPlaceholderText("COR value")
