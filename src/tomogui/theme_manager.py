@@ -5,15 +5,13 @@ Handles theme switching between bright and dark modes with persistence
 
 import os
 import json
-import matplotlib
-import importlib.resources
 from pathlib import Path
 from PyQt5.QtWidgets import QApplication
 from .styles.themes import get_theme_stylesheet
 
 
 class ThemeManager:
-    """Manages application themes including PyQt and matplotlib styling"""
+    """Manages application themes including PyQt styling"""
 
     THEMES = ['bright', 'dark']
     DEFAULT_THEME = 'bright'
@@ -78,9 +76,6 @@ class ThemeManager:
             stylesheet = get_theme_stylesheet(theme_name)
             self.app.setStyleSheet(stylesheet)
 
-        # Apply matplotlib style
-        self._apply_matplotlib_theme(theme_name)
-
         # Save preference
         self.save_theme_preference()
 
@@ -90,24 +85,6 @@ class ThemeManager:
                 callback(theme_name)
             except Exception as e:
                 print(f"Warning: Theme callback failed: {e}")
-
-    def _apply_matplotlib_theme(self, theme_name):
-        """Apply matplotlib style for the given theme"""
-        try:
-            matplotlib.rcdefaults()
-
-            if theme_name == 'dark':
-                style_file = 'tomoGUI_mpl_dark.mplstyle'
-            else:
-                style_file = 'tomoGUI_mpl_bright.mplstyle'
-
-            try:
-                with importlib.resources.path('tomogui.styles', style_file) as style_path:
-                    matplotlib.style.use(str(style_path))
-            except (ImportError, FileNotFoundError):
-                print(f"Warning: Could not load matplotlib style file: {style_file}")
-        except Exception as e:
-            print(f"Warning: Could not apply matplotlib theme: {e}")
 
     def toggle_theme(self):
         """Toggle between bright and dark themes"""
