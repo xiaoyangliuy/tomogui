@@ -193,6 +193,7 @@ class TomoGUI(QWidget):
         self.highlight_scan = None
         self.highlight_row = None
         self._current_source_file = None
+        self._running_full_file = None  # track which file is under local full recon
         self.cor_path = None
         self.batch_file_main_list = []
 
@@ -2431,6 +2432,7 @@ class TomoGUI(QWidget):
             if file_info['filename'] == filename:
                 self.highlight_scan = file_info['path']
                 self.highlight_row = row #gives index of the self.batch_file_table_list
+        self._update_full_btn_state()  # grey out only if this file is running locally
         # Log or print the selected file for debugging
         self.log_output.append(f'Click on {self.highlight_scan} now for other operations')
 
@@ -2778,80 +2780,89 @@ class TomoGUI(QWidget):
                 except Exception as e:
                     self.log_output.append(f'<span style="color:red;">\u26a0\ufe0f Could not remove {temp_try}: {e}</span>')
 
-    def full_reconstruction(self):
-        self.full_btn.setEnabled(False)
-        proj_file = self.highlight_scan
-        pn = os.path.splitext(os.path.basename(proj_file))[0]
-        recon_way = self.recon_way_box_full.currentText()  
-        highlight_row = self.highlight_row
-        cor_method = self.cor_full_method.currentText()
-        gpu = str(self.cuda_full_box.value())
-        if cor_method == "manual":
-            try:
-                cor_value = float(self.batch_file_main_list[highlight_row]['cor_input'].text().strip())
-            except ValueError:
-                self.log_output.append(f'<span style="color:red;">\u274c[ERROR] Invalid Full COR value</span>')
-                return
-        if self.use_conf_box.isChecked():
-            self.log_output.append("\u26a0\ufe0f You are using config file, only recon type, filename, rot axis from GUI")
-            config_text = self.config_editor_full.toPlainText()
-            if not config_text.strip():
-                self.log_output.append(f'<span style="color:red;">\u26a0\ufe0f No text in conf, stop</span>')
-                return
-            temp_full = os.path.join(self.data_path.text(), "temp_full.conf")
-            with open(temp_full, "w") as f:
-                f.write(config_text)
-            # Base command
-            cmd = ["tomocupy", str(recon_way),
-             "--reconstruction-type", "full",
-             "--config", temp_full, 
-             "--file-name", proj_file, 
-             "--rotation-axis", str(cor_value)]    
+    def _update_full_btn_state(self):
+        """Grey out Full button only while the currently selected file is running locally."""
+        if self._running_full_file and self.highlight_scan == self._running_full_file:
+            self.full_btn.setEnabled(False)
         else:
-            self.log_output.append('\u26a0\ufe0f You are using params from GUI')
-            if cor_method == "auto":
-                # Base command
-                cmd = ["tomocupy", str(recon_way),
-                "--reconstruction-type", "full",
-                "--file-name", proj_file, 
-                "--rotation-axis-auto", cor_method]
-            elif cor_method == "manual":
-                # Base command
-                cmd = ["tomocupy", str(recon_way),
-                "--reconstruction-type", "full",
-                "--file-name", proj_file, 
-                "--rotation-axis-auto", cor_method,
-                "--rotation-axis", str(cor_value)]
-                # Append tabs selections
-            cmd += self._gather_params_args()
-            cmd += self._gather_rings_args()
-            cmd += self._gather_bhard_args()
-            cmd += self._gather_phase_args()
-            cmd += self._gather_Geometry_args()        
-            cmd += self._gather_Data_args()                
-            cmd += self._gather_Performance_args()
-                                
-        code = self.run_command_live(cmd, proj_file=proj_file, job_label="Full recon", wait=True, cuda_devices=gpu)
+            self.full_btn.setEnabled(True)
+
+    def full_reconstruction(self):
+        proj_file = self.highlight_scan
+        # Mark this file as running locally and grey out button only for it
+        self._running_full_file = proj_file
+        self._update_full_btn_state()
         try:
-            if code == 0:
-                fullpath = os.path.join(f"{self.data_path.text()}_rec", f"{pn}_rec")
-                full_files = glob.glob(os.path.join(fullpath, "*.tiff"))
-                num_1 = int(Path(full_files[0]).stem.split("_")[-1])
-                num_2 = int(Path(full_files[-1]).stem.split("_")[-1])
-                self._update_row(row=highlight_row,color='green',status=f'Full {num_1}-{num_2}') #change table content and self.batch_file_list
-                self.log_output.append(f'<span style="color:green;">\u2705 Done full recon {proj_file}</span>')
-                del fullpath, full_files, num_1, num_2, pn
-            else:
-                self.log_output.append(f'<span style="color:red;">\u274c Full recon {proj_file} failed</span>')
-        finally:
-            if self.use_conf_box.isChecked():
+            pn = os.path.splitext(os.path.basename(proj_file))[0]
+            recon_way = self.recon_way_box_full.currentText()
+            highlight_row = self.highlight_row
+            cor_method = self.cor_full_method.currentText()
+            gpu = str(self.cuda_full_box.value())
+            if cor_method == "manual":
                 try:
-                    if os.path.exists(temp_full):
-                        os.remove(temp_full)
-                        self.log_output.append(f"\U0001f9f9 Removed {temp_full}")
-                except Exception as e:
-                    self.log_output.append(f'<span style="color:red;">\u26a0\ufe0f Could not remove {temp_full}: {e}</span>')
-        self.full_btn.setEnabled(True)
+                    cor_value = float(self.batch_file_main_list[highlight_row]['cor_input'].text().strip())
+                except ValueError:
+                    self.log_output.append('<span style="color:red;">\u274c[ERROR] Invalid Full COR value</span>')
+                    return
+            if self.use_conf_box.isChecked():
+                self.log_output.append("\u26a0\ufe0f You are using config file, only recon type, filename, rot axis from GUI")
+                config_text = self.config_editor_full.toPlainText()
+                if not config_text.strip():
+                    self.log_output.append('<span style="color:red;">\u26a0\ufe0f No text in conf, stop</span>')
+                    return
+                temp_full = os.path.join(self.data_path.text(), "temp_full.conf")
+                with open(temp_full, "w") as f:
+                    f.write(config_text)
+                cmd = ["tomocupy", str(recon_way),
+                       "--reconstruction-type", "full",
+                       "--config", temp_full,
+                       "--file-name", proj_file,
+                       "--rotation-axis", str(cor_value)]
+            else:
+                self.log_output.append('\u26a0\ufe0f You are using params from GUI')
+                if cor_method == "auto":
+                    cmd = ["tomocupy", str(recon_way),
+                           "--reconstruction-type", "full",
+                           "--file-name", proj_file,
+                           "--rotation-axis-auto", cor_method]
+                elif cor_method == "manual":
+                    cmd = ["tomocupy", str(recon_way),
+                           "--reconstruction-type", "full",
+                           "--file-name", proj_file,
+                           "--rotation-axis-auto", cor_method,
+                           "--rotation-axis", str(cor_value)]
+                cmd += self._gather_params_args()
+                cmd += self._gather_rings_args()
+                cmd += self._gather_bhard_args()
+                cmd += self._gather_phase_args()
+                cmd += self._gather_Geometry_args()
+                cmd += self._gather_Data_args()
+                cmd += self._gather_Performance_args()
+
+            code = self.run_command_live(cmd, proj_file=proj_file, job_label="Full recon", wait=True, cuda_devices=gpu)
+            try:
+                if code == 0:
+                    fullpath = os.path.join(f"{self.data_path.text()}_rec", f"{pn}_rec")
+                    full_files = glob.glob(os.path.join(fullpath, "*.tiff"))
+                    num_1 = int(Path(full_files[0]).stem.split("_")[-1])
+                    num_2 = int(Path(full_files[-1]).stem.split("_")[-1])
+                    self._update_row(row=highlight_row, color='green', status=f'Full {num_1}-{num_2}')
+                    self.log_output.append(f'<span style="color:green;">\u2705 Done full recon {proj_file}</span>')
+                    del fullpath, full_files, num_1, num_2, pn
+                else:
+                    self.log_output.append(f'<span style="color:red;">\u274c Full recon {proj_file} failed</span>')
+            finally:
+                if self.use_conf_box.isChecked():
+                    try:
+                        if os.path.exists(temp_full):
+                            os.remove(temp_full)
+                            self.log_output.append(f"\U0001f9f9 Removed {temp_full}")
+                    except Exception as e:
+                        self.log_output.append(f'<span style="color:red;">\u26a0\ufe0f Could not remove {temp_full}: {e}</span>')
+        finally:
+            # Always clear the running marker and refresh button state
+            self._running_full_file = None
+            self._update_full_btn_state()
 
     #=============Batch OPERATIONS==================
     def _batch_select_all(self):
