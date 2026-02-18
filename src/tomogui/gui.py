@@ -624,6 +624,7 @@ class TomoGUI(QWidget):
         self.slice_num.setStyleSheet("font-size: 11pt;")
         toolbar_row.addWidget(self.slice_num)
 
+
         # Colormap dropdown
         cmap_label = QLabel(" Cmap ")
         cmap_label.setStyleSheet("font-size: 11pt;")
@@ -956,7 +957,7 @@ class TomoGUI(QWidget):
         bhard_tab = QWidget()
         outer = QVBoxLayout(bhard_tab)
 
-        # Check all button
+        #check all button
         ca_layout = QHBoxLayout()
         ca_button = QPushButton("Check all")
         ca_layout.addWidget(ca_button)
@@ -1069,7 +1070,7 @@ class TomoGUI(QWidget):
             for flag, (kind, w, include_cb, default) in self.bhard_widgets.items():
                 if include_cb is not None:
                     include_cb.setChecked(True)
-
+        
         ca_button.clicked.connect(check_all)
 
         # Beam hardening / source & scintillator
@@ -2788,6 +2789,7 @@ class TomoGUI(QWidget):
             self.full_btn.setEnabled(True)
 
     def full_reconstruction(self):
+        self.full_btn.setEnabled(False)
         proj_file = self.highlight_scan
         # Mark this file as running locally and grey out button only for it
         self._running_full_file = proj_file
@@ -2860,10 +2862,14 @@ class TomoGUI(QWidget):
                     except Exception as e:
                         self.log_output.append(f'<span style="color:red;">\u26a0\ufe0f Could not remove {temp_full}: {e}</span>')
         finally:
-            # Always clear the running marker and refresh button state
-            self._running_full_file = None
-            self._update_full_btn_state()
-
+            if self.use_conf_box.isChecked():
+                try:
+                    if os.path.exists(temp_full):
+                        os.remove(temp_full)
+                        self.log_output.append(f"\U0001f9f9 Removed {temp_full}")
+                except Exception as e:
+                    self.log_output.append(f'<span style="color:red;">\u26a0\ufe0f Could not remove {temp_full}: {e}</span>')
+        self.full_btn.setEnabled(True)
     #=============Batch OPERATIONS==================
     def _batch_select_all(self):
         """Select all files in the batch list"""
@@ -3279,21 +3285,17 @@ class TomoGUI(QWidget):
         idx = self.slice_slider.value()
         self._remember_view()
         if 0 <= idx < len(self.preview_files):
-            path = self.preview_files[idx]
-            self.show_image(path, flag=None)
-            self.filename_label.setText(os.path.basename(path))
-            z = os.path.basename(path).split('_')[-1].split('.')[0]
+            self.show_image(self.preview_files[idx], flag=None)
+            z = self.preview_files[idx].split('_')[-1].split('.')[0]
             self.slice_num.setText(z)
 
     def update_full_slice(self):
         idx = self.slice_slider.value()
         self._remember_view()
         if 0 <= idx < len(self.full_files):
-            path = self.full_files[idx]
-            self.show_image(path, flag=None)
-            z = os.path.basename(path).split('_')[-1].split('.')[0]
+            self.show_image(self.full_files[idx], flag=None)
+            z = self.full_files[idx].split('_')[-1].split('.')[0]
             self.slice_num.setText(z)
-        self.filename_label.setText("")
         
 
     def _safe_open_image(self, path, flag=None, retries=3): 
