@@ -695,7 +695,19 @@ class TomoGUI(QWidget):
         self.canvas_widget.installEventFilter(self)
 
         canvas_slider_frame = QVBoxLayout()
-        canvas_slider_frame.addWidget(self.canvas_widget)
+        if not VISPY_AVAILABLE:
+            # Histogram LUT widget for manual level adjustment (pyqtgraph only)
+            self._pg_hist = pg.HistogramLUTWidget(orientation='vertical')
+            self._pg_hist.setImageItem(self._pg_image_item)
+            self._pg_hist.setMinimumWidth(100)
+            self._pg_hist.setMaximumWidth(130)
+            self._pg_hist.item.sigLevelsChanged.connect(self._pg_hist_levels_changed)
+            canvas_row = QHBoxLayout()
+            canvas_row.addWidget(self.canvas_widget, 1)
+            canvas_row.addWidget(self._pg_hist)
+            canvas_slider_frame.addLayout(canvas_row)
+        else:
+            canvas_slider_frame.addWidget(self.canvas_widget)
         slider_layout = QHBoxLayout()
         self.slice_slider = QSlider(Qt.Horizontal)
         self.slice_slider.setStyleSheet("""
@@ -2083,8 +2095,12 @@ class TomoGUI(QWidget):
         if VISPY_AVAILABLE and self._current_img is not None:
             self.image_visual.cmap = self.current_cmap
             self.canvas.update()
-        else:
-            self.refresh_current_image()
+        elif not VISPY_AVAILABLE and self._current_img is not None:
+            try:
+                lut = (_mpl_cm.get_cmap(self.current_cmap)(np.linspace(0, 1, 256)) * 255).astype(np.uint8)
+                self._pg_image_item.setLookupTable(lut[:, :3])
+            except Exception:
+                pass
 
     def update_vmin_vmax(self): #link to min/max input
         try:
@@ -2101,8 +2117,8 @@ class TomoGUI(QWidget):
         if VISPY_AVAILABLE and self._current_img is not None and self.vmin is not None and self.vmax is not None:
             self.image_visual.clim = (self.vmin, self.vmax)
             self.canvas.update()
-        else:
-            self.refresh_current_image()
+        elif not VISPY_AVAILABLE and self._current_img is not None and self.vmin is not None and self.vmax is not None:
+            self._pg_apply_levels(self.vmin, self.vmax)
 
     def refresh_current_image(self):
         if self.full_files and 0 <= self.slice_slider.value() < len(self.full_files):
@@ -3132,6 +3148,22 @@ class TomoGUI(QWidget):
         x1, y1 = x0 + size.x(), y0 + size.y()
         self.roi_extent = (min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1))
 
+    def _pg_apply_levels(self, vmin, vmax):
+        """Update display levels on the pyqtgraph ImageItem without reloading the image."""
+        self._pg_image_item.setLevels([vmin, vmax])
+        # Sync the histogram widget so its level lines match
+        if hasattr(self, '_pg_hist'):
+            self._pg_hist.item.setLevels(vmin, vmax)
+        self.min_input.setText(str(round(vmin, 5)))
+        self.max_input.setText(str(round(vmax, 5)))
+
+    def _pg_hist_levels_changed(self):
+        """Sync vmin/vmax when the user drags the histogram level lines."""
+        vmin, vmax = self._pg_hist.item.getLevels()
+        self.vmin, self.vmax = float(vmin), float(vmax)
+        self.min_input.setText(str(round(self.vmin, 5)))
+        self.max_input.setText(str(round(self.vmax, 5)))
+
     # ---- VisPy-only helpers ----
 
     def _draw_roi_visual(self):
@@ -3251,8 +3283,8 @@ class TomoGUI(QWidget):
         if VISPY_AVAILABLE and self._current_img is not None:
             self.image_visual.clim = (self.vmin, self.vmax)
             self.canvas.update()
-        else:
-            self.refresh_current_image()
+        elif not VISPY_AVAILABLE and self._current_img is not None:
+            self._pg_apply_levels(self.vmin, self.vmax)
 
     def reset_img_contrast(self): #link to Reset button
         if self._current_img is None:
@@ -3269,9 +3301,10 @@ class TomoGUI(QWidget):
                 self._last_camera_rect = None
                 self._last_image_shape = None
                 self.canvas.update()
-            else:
-                self._last_image_shape = None  # force autoRange in pg mode
-                self.refresh_current_image()
+            elif not VISPY_AVAILABLE and self._current_img is not None:
+                self._last_image_shape = None
+                self._pg_apply_levels(self.vmin, self.vmax)
+                self._pg_view_box.autoRange()
 
     def update_raw_slice(self):
         idx = self.slice_slider.value()
