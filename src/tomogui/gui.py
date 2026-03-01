@@ -3020,9 +3020,7 @@ class TomoGUI(QWidget):
             pass
         self.slice_slider.setMaximum(len(self.preview_files) - 1)
         self.slice_slider.valueChanged.connect(self.update_try_slice)
-        # Store the source filename for display
-        #self._current_source_file = os.path.basename(proj_file)
-        #self._current_view_mode = "try"
+        self._try_proj_name = proj_name
         self.update_try_slice()  
 
     def view_full_reconstruction(self):
@@ -3318,17 +3316,21 @@ class TomoGUI(QWidget):
         idx = self.slice_slider.value()
         self._remember_view()
         if 0 <= idx < len(self.preview_files):
-            self.show_image(self.preview_files[idx], flag=None)
-            z = self.preview_files[idx].split('_')[-1].split('.')[0]
+            path = self.preview_files[idx]
+            self.show_image(path, flag=None)
+            self.filename_label.setText(os.path.basename(path))
+            z = os.path.basename(path).split('_')[-1].split('.')[0]
             self.slice_num.setText(z)
 
     def update_full_slice(self):
         idx = self.slice_slider.value()
         self._remember_view()
         if 0 <= idx < len(self.full_files):
-            self.show_image(self.full_files[idx], flag=None)
-            z = self.full_files[idx].split('_')[-1].split('.')[0]
+            path = self.full_files[idx]
+            self.show_image(path, flag=None)
+            z = os.path.basename(path).split('_')[-1].split('.')[0]
             self.slice_num.setText(z)
+        self.filename_label.setText("")
         
 
     def _safe_open_image(self, path, flag=None, retries=3): 
