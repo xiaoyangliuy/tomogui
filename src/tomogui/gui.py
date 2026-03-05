@@ -195,6 +195,7 @@ class TomoGUI(QWidget):
         self._current_source_file = None
         self._running_full_file = None  # track which file is under local full recon
         self.cor_path = None
+        self._recon_params_data = None  # per-dataset params cache; None = needs reload
         self.batch_file_main_list = []
 
         # Batch selection state for shift-click
@@ -1873,10 +1874,14 @@ class TomoGUI(QWidget):
         func_box.addWidget(self.use_conf_box)
         load_config_btn = QPushButton("Load Config")
         save_config_btn = QPushButton("Save Config")
+        save_params_btn = QPushButton("Save Params")
+        save_params_btn.setToolTip("Save all current GUI reconstruction parameters for the selected dataset")
         load_config_btn.clicked.connect(self.load_config)
         save_config_btn.clicked.connect(self.save_config)
+        save_params_btn.clicked.connect(self._save_current_scan_params)
         func_box.addWidget(load_config_btn)
         func_box.addWidget(save_config_btn)
+        func_box.addWidget(save_params_btn)
         config_main.addLayout(func_box)
         #left frame for Try
         left_try_box = QGroupBox("Try Recon Config")
@@ -2242,6 +2247,7 @@ class TomoGUI(QWidget):
         self.batch_file_main_table.setRowCount(0)
         self.batch_file_main_list = []
         self.batch_last_clicked_row = None
+        self._recon_params_data = None  # force reload for new folder
 
         # Load COR data from JSON or CSV (CSV takes priority if both exist)
         self.cor_data, fns = self._load_cor_data(table_folder, h5_files)
@@ -2357,6 +2363,7 @@ class TomoGUI(QWidget):
             self.highlight_scan = h5_files[0] #always the latest coming in scan
             self.highlight_row = 0
             self.log_output.append(f'Clicked on {self.highlight_scan}')
+            self._load_scan_params(self.highlight_scan)
 
     def _save_cor_data(self, data_folder, cor_data_dict):
         """
@@ -2396,6 +2403,142 @@ class TomoGUI(QWidget):
                 self.log_output.append(f'<span style="color:green;">✔ COR values saved to JSON</span>')
         except Exception as e:
             self.log_output.append(f'<span style="color:red;">❌ Failed to write JSON: {e}</span>')
+
+    # ===== PER-DATASET RECONSTRUCTION PARAMS =====
+
+    @staticmethod
+    def _get_widget_value(kind, w):
+        if kind in ("spin", "dspin"):
+            return w.value()
+        elif kind == "combo":
+            return w.currentText()
+        elif kind == "line":
+            return w.text()
+        elif kind == "check":
+            return w.isChecked()
+        return None
+
+    @staticmethod
+    def _set_widget_value(kind, w, val):
+        try:
+            if kind == "spin":
+                w.setValue(int(val))
+            elif kind == "dspin":
+                w.setValue(float(val))
+            elif kind == "combo":
+                idx = w.findText(str(val))
+                if idx >= 0:
+                    w.setCurrentIndex(idx)
+            elif kind == "line":
+                w.setText(str(val))
+            elif kind == "check":
+                w.setChecked(bool(val))
+        except Exception:
+            pass
+
+    def _gather_all_gui_params(self):
+        """Collect all current GUI reconstruction parameters into a dict."""
+        params = {
+            "recon_way":       self.recon_way_box.currentText(),
+            "recon_way_full":  self.recon_way_box_full.currentText(),
+            "cor_method":      self.cor_method_box.currentText(),
+            "cor_method_full": self.cor_full_method.currentText(),
+            "cuda_try":        self.cuda_box_try.value(),
+            "cuda_full":       self.cuda_full_box.value(),
+            "use_conf":        self.use_conf_box.isChecked(),
+            "config_try":      self.config_editor_try.toPlainText(),
+            "config_full":     self.config_editor_full.toPlainText(),
+        }
+        for tab_key, widget_dict in [
+            ("params",      self.param_widgets),
+            ("bhard",       self.bhard_widgets),
+            ("phase",       self.phase_widgets),
+            ("rings",       self.rings_widgets),
+            ("geometry",    self.Geometry_widgets),
+            ("data",        self.data_widgets),
+            ("performance", self.perf_widgets),
+        ]:
+            tab_data = {}
+            for flag, (kind, w, include_cb, _default) in widget_dict.items():
+                val = self._get_widget_value(kind, w)
+                inc = include_cb.isChecked() if include_cb is not None else None
+                tab_data[flag] = {"value": val, "include": inc}
+            params[tab_key] = tab_data
+        return params
+
+    def _apply_params_to_gui(self, params):
+        """Apply a saved params dict to all GUI reconstruction widgets."""
+        try:
+            self.recon_way_box.setCurrentText(params.get("recon_way", "recon"))
+            self.recon_way_box_full.setCurrentText(params.get("recon_way_full", "recon"))
+            self.cor_method_box.setCurrentText(params.get("cor_method", "manual"))
+            self.cor_full_method.setCurrentText(params.get("cor_method_full", "manual"))
+            self.cuda_box_try.setValue(int(params.get("cuda_try", 0)))
+            self.cuda_full_box.setValue(int(params.get("cuda_full", 0)))
+            self.use_conf_box.setChecked(bool(params.get("use_conf", False)))
+            self.config_editor_try.setPlainText(params.get("config_try", ""))
+            self.config_editor_full.setPlainText(params.get("config_full", ""))
+            for tab_key, widget_dict in [
+                ("params",      self.param_widgets),
+                ("bhard",       self.bhard_widgets),
+                ("phase",       self.phase_widgets),
+                ("rings",       self.rings_widgets),
+                ("geometry",    self.Geometry_widgets),
+                ("data",        self.data_widgets),
+                ("performance", self.perf_widgets),
+            ]:
+                tab_data = params.get(tab_key, {})
+                for flag, (kind, w, include_cb, _default) in widget_dict.items():
+                    if flag in tab_data:
+                        entry = tab_data[flag]
+                        self._set_widget_value(kind, w, entry.get("value"))
+                        if include_cb is not None and entry.get("include") is not None:
+                            include_cb.setChecked(bool(entry["include"]))
+        except Exception as e:
+            self.log_output.append(f'<span style="color:orange;">⚠️ Error applying params: {e}</span>')
+
+    def _load_recon_params_file(self, data_folder):
+        """Load recon_params.json from data folder. Returns dict keyed by full file path."""
+        path = os.path.join(data_folder, "recon_params.json")
+        if os.path.exists(path):
+            try:
+                with open(path, "r") as f:
+                    return json.load(f)
+            except Exception as e:
+                self.log_output.append(f'<span style="color:orange;">⚠️ Could not load recon_params.json: {e}</span>')
+        return {}
+
+    def _save_recon_params_file(self, data_folder, params_dict):
+        """Save recon_params.json to data folder."""
+        path = os.path.join(data_folder, "recon_params.json")
+        try:
+            with open(path, "w") as f:
+                json.dump(params_dict, f, indent=2)
+        except Exception as e:
+            self.log_output.append(f'<span style="color:red;">❌ Could not save recon_params.json: {e}</span>')
+
+    def _save_current_scan_params(self):
+        """Save current GUI params for the highlighted scan to recon_params.json."""
+        if not self.highlight_scan:
+            return
+        data_folder = self.data_path.text().strip()
+        if not data_folder or not os.path.isdir(data_folder):
+            return
+        if self._recon_params_data is None:
+            self._recon_params_data = self._load_recon_params_file(data_folder)
+        self._recon_params_data[self.highlight_scan] = self._gather_all_gui_params()
+        self._save_recon_params_file(data_folder, self._recon_params_data)
+
+    def _load_scan_params(self, proj_file):
+        """Load and apply saved GUI params for proj_file, if they exist."""
+        data_folder = self.data_path.text().strip()
+        if not data_folder or not os.path.isdir(data_folder):
+            return
+        if self._recon_params_data is None:
+            self._recon_params_data = self._load_recon_params_file(data_folder)
+        if proj_file in self._recon_params_data:
+            self._apply_params_to_gui(self._recon_params_data[proj_file])
+            self.log_output.append(f'✅ Loaded params for {os.path.basename(proj_file)}')
 
     def _on_main_cor_edited(self, file_path:str, row:int):
         """
@@ -2441,6 +2584,9 @@ class TomoGUI(QWidget):
                 self.proj_file_box.addItem(os.path.basename(f), f)
 
     def on_table_row_clicked(self, row, column):
+        # Save current GUI params for the previously selected dataset before switching
+        if self.highlight_scan:
+            self._save_current_scan_params()
         # Get the filename from the clicked row
         filename_item = self.batch_file_main_table.item(row, 1)  # Column 1 contains the filename
         filename = filename_item.text()
@@ -2450,8 +2596,9 @@ class TomoGUI(QWidget):
                 self.highlight_scan = file_info['path']
                 self.highlight_row = row #gives index of the self.batch_file_table_list
         self._update_full_btn_state()  # grey out only if this file is running locally
-        # Log or print the selected file for debugging
         self.log_output.append(f'Click on {self.highlight_scan} now for other operations')
+        # Load saved params for newly selected dataset (if any)
+        self._load_scan_params(self.highlight_scan)
 
     def load_config(self):
         dialog = QFileDialog(self)
