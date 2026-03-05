@@ -2102,7 +2102,7 @@ class TomoGUI(QWidget):
             self.canvas.update()
         elif not VISPY_AVAILABLE and self._current_img is not None:
             try:
-                lut = (_mpl_cm.get_cmap(self.current_cmap)(np.linspace(0, 1, 256)) * 255).astype(np.uint8)
+                lut = (_mpl_cm.colormaps[self.current_cmap](np.linspace(0, 1, 256)) * 255).astype(np.uint8)
                 self._pg_image_item.setLookupTable(lut[:, :3])
             except Exception:
                 pass
@@ -3519,7 +3519,7 @@ class TomoGUI(QWidget):
             self._pg_image_item.setImage(img)
             self._pg_image_item.setLevels([vmin, vmax])
             try:
-                lut = (_mpl_cm.get_cmap(self.current_cmap)(np.linspace(0, 1, 256)) * 255).astype(np.uint8)
+                lut = (_mpl_cm.colormaps[self.current_cmap](np.linspace(0, 1, 256)) * 255).astype(np.uint8)
                 self._pg_image_item.setLookupTable(lut[:, :3])
             except Exception:
                 pass
