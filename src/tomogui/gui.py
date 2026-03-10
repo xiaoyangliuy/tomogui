@@ -2972,114 +2972,91 @@ class TomoGUI(QWidget):
                     self.log_output.append(f'<span style="color:red;">\u26a0\ufe0f Could not remove {temp_try}: {e}</span>')
 
     def try_ai_reconstruction(self):
-        """Run tomocor AI inference directly via Python API (no CLI required)."""
-        from pathlib import Path as _Path
-
-        proj_file = self.highlight_scan
-        if not proj_file:
-            self.log_output.append('<span style="color:red;">❌ No file selected</span>')
-            return
+        """Run Try reconstruction then AI inference to find best COR."""
+        import re
+        from argparse import Namespace
+        from PIL import Image as _PIL_Image
 
         model_path = self.ai_model_path.text().strip()
         if not model_path or not os.path.exists(model_path):
             self.log_output.append('<span style="color:red;">❌ Invalid AI model path</span>')
             return
 
-        cor_val = self.cor_input.text().strip()
-        try:
-            cor = float(cor_val)
-        except ValueError:
-            self.log_output.append('<span style="color:red;">❌ Invalid COR value</span>')
+        # Step 1: run regular try reconstruction (blocks until done)
+        self.try_reconstruction()
+
+        # Step 2: locate the output TIFFs
+        proj_file = self.highlight_scan
+        if not proj_file:
+            return
+        data_folder = self.data_path.text().strip()
+        proj_name = os.path.splitext(os.path.basename(proj_file))[0]
+        try_dir = os.path.join(f"{data_folder}_rec", "try_center", proj_name)
+        tiff_files = sorted(glob.glob(os.path.join(try_dir, "*.tiff")))
+        if not tiff_files:
+            self.log_output.append(f'<span style="color:red;">❌ No TIFFs in {try_dir}</span>')
             return
 
+        # Step 3: load images and extract COR values from filenames
+        img_list = []
+        cor_list = []
+        for tiff in tiff_files:
+            m = re.search(r'center(\d+\.\d+)', os.path.basename(tiff))
+            if not m:
+                continue
+            cor_val = float(m.group(1))
+            arr = np.array(_PIL_Image.open(tiff)).astype(np.float32)
+            img_list.append(arr)
+            cor_list.append(cor_val)
+
+        if not img_list:
+            self.log_output.append('<span style="color:red;">❌ Could not parse COR values from TIFF filenames</span>')
+            return
+
+        img_cache = np.array(img_list)
+        center_of_rotation_cache = np.array(cor_list)
+
+        # Step 4: run inference
         try:
-            from tomocor import GPURec, inference_pipeline
-            from tomocor import reader as tc_reader
-            from tomocor import writer as tc_writer
-            from tomocor import config as tc_config
-            from tomocor.global_vars import args as tc_args, params as tc_params
+            from tomogui._tomocor_infer.inference import inference_pipeline
         except ImportError as e:
-            self.log_output.append(f'<span style="color:red;">❌ Cannot import tomocor: {e}<br>Set the tomocor src path or run: pip install -e /path/to/tomocor-main</span>')
+            self.log_output.append(f'<span style="color:red;">❌ Inference module error: {e}</span>')
             return
 
-        # Get search params from Reconstruction tab widgets
-        search_width = 50.0
-        search_step = 0.5
-        nsino = '0.5'
-        if "--center-search-width" in self.param_widgets:
-            kind, w, _, _ = self.param_widgets["--center-search-width"]
-            search_width = float(self._get_widget_value(kind, w) or 50.0)
-        if "--center-search-step" in self.param_widgets:
-            kind, w, _, _ = self.param_widgets["--center-search-step"]
-            search_step = float(self._get_widget_value(kind, w) or 0.5)
-        if "--nsino" in self.param_widgets:
-            kind, w, _, _ = self.param_widgets["--nsino"]
-            nsino = str(self._get_widget_value(kind, w) or '0.5')
+        ai_args = Namespace(
+            infer_use_8bits=True,
+            infer_downsample_factor=2,
+            infer_num_windows=3,
+            infer_seed_number=10,
+            infer_model_path=model_path,
+            infer_window_size=518,
+        )
 
-        # Build args from tomocor defaults then override what we need
-        defaults = tc_config.Params(sections=tc_config.RECON_PARAMS).get_defaults()
-        tc_args.__dict__.update(defaults.__dict__)
-        tc_args.file_name         = _Path(proj_file)
-        tc_args.flat_file_name    = None
-        tc_args.dark_file_name    = None
-        tc_args.out_path_name     = None
-        tc_args.rotation_axis     = cor
-        tc_args.center_search_width = search_width
-        tc_args.center_search_step  = search_step
-        tc_args.nsino             = str(nsino)
-        tc_args.infer_model_path  = model_path
-        tc_args.infer_input_data_type = 'raw'
-        # fixed for inference (from run_inference in tomocor/__main__.py)
-        tc_args.retrieve_phase_method = 'none'
-        tc_args.rotate_proj_angle = 0
-        tc_args.lamino_angle      = 0
-        tc_args.reconstruction_type = 'try'
-        tc_args.cache_to_infer    = True
-        tc_args.beam_hardening_method = None
-
-        # Set CUDA device
-        gpu = str(self.cuda_box_try.value())
-        old_cuda = os.environ.get('CUDA_VISIBLE_DEVICES')
-        os.environ['CUDA_VISIBLE_DEVICES'] = gpu
-
-        self.log_output.append(f'🚀 [Try AI] starting for {os.path.basename(proj_file)}...')
+        self.log_output.append(f'🤖 Running AI inference on {len(img_list)} slices...')
         QApplication.processEvents()
 
         try:
-            cl_reader = tc_reader.Reader()
-            cl_writer = tc_writer.Writer()
-            clpthandle = GPURec(cl_reader, cl_writer)
-            img_cache, center_of_rotation_cache, _ = clpthandle.recon_try()
-            out_dir = tc_params.fnameout[:-6]   # strip trailing '/recon'
-            inference_pipeline(tc_args, img_cache, center_of_rotation_cache, out_dir)
-
-            # Read the predicted COR from the output file
-            cor_txt = os.path.join(out_dir, 'center_of_rotation.txt')
+            inference_pipeline(ai_args, img_cache, center_of_rotation_cache, try_dir)
+            cor_txt = os.path.join(try_dir, 'center_of_rotation.txt')
             if os.path.exists(cor_txt):
                 with open(cor_txt) as f:
                     lines = [line.strip() for line in f if line.strip()]
                 if lines:
                     ai_cor = lines[-1]
                     float(ai_cor)  # validate
-                    data_folder = self.data_path.text().strip()
                     self.cor_data[proj_file] = ai_cor
                     self._save_cor_data(data_folder, self.cor_data)
                     if self.highlight_row is not None:
-                        w = self.batch_file_main_table.cellWidget(self.highlight_row, 2)
-                        if w:
-                            w.setText(ai_cor)
-                    self.log_output.append(f'<span style="color:green;">✅ AI COR: {ai_cor} saved for {os.path.basename(proj_file)}</span>')
+                        cor_widget = self.batch_file_main_table.cellWidget(self.highlight_row, 2)
+                        if cor_widget:
+                            cor_widget.setText(ai_cor)
+                    self.log_output.append(f'<span style="color:green;">✅ AI COR: {ai_cor} — saved for {os.path.basename(proj_file)}</span>')
                 else:
                     self.log_output.append('<span style="color:orange;">⚠️ center_of_rotation.txt is empty</span>')
             else:
                 self.log_output.append(f'<span style="color:orange;">⚠️ Output not found: {cor_txt}</span>')
         except Exception as e:
             self.log_output.append(f'<span style="color:red;">❌ Try AI error: {e}</span>')
-        finally:
-            if old_cuda is None:
-                os.environ.pop('CUDA_VISIBLE_DEVICES', None)
-            else:
-                os.environ['CUDA_VISIBLE_DEVICES'] = old_cuda
 
     def _update_full_btn_state(self):
         """Grey out Full button only while the currently selected file is running locally."""

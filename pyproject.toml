@@ -20,6 +20,8 @@ dependencies = [
     "Pillow>=8.0.0",
     "h5py>=3.0.0",
     "pyqtgraph>=0.13.3",
+    "torch>=2.0.0",
+    "einops>=0.6.0",
 ]
 
 [project.scripts]
