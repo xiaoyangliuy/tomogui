@@ -10,7 +10,7 @@ authors = [
     {name = "Xiaoyang Liu", email = "XXX@XXX.gov"},
     {name = "Alberto Mittone", email = "amittone@anl.gov"}
 ]
-license = {text = "MIT"}
+license = "MIT"
 requires-python = ">=3.8,<3.13"
 dependencies = [
     "numpy>=1.20.0",
