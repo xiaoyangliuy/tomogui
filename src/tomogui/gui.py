@@ -297,6 +297,33 @@ class TomoGUI(QWidget):
         single_ops.addWidget(clear_log_btn)
         main_tab.addLayout(single_ops)
 
+        # Row 1b - Try AI (tomocor inference)
+        ai_ops = QHBoxLayout()
+        ai_ops.setSpacing(6)
+        ai_model_label = QLabel("AI Model:")
+        ai_model_label.setStyleSheet("QLabel { font-size: 10.5pt; }")
+        ai_ops.addWidget(ai_model_label)
+        self.ai_model_path = QLineEdit()
+        self.ai_model_path.setPlaceholderText("Path to tomocor model weights (.pth)")
+        self.ai_model_path.setStyleSheet("QLineEdit { font-size: 10pt; }")
+        ai_ops.addWidget(self.ai_model_path, 1)
+        ai_browse_btn = QPushButton("Browse")
+        ai_browse_btn.setStyleSheet("QPushButton { font-size: 10pt; }")
+        ai_browse_btn.setFixedWidth(65)
+        def _browse_ai_model():
+            fn, _ = QFileDialog.getOpenFileName(self, "Select model weights", "", "Model files (*.pth *.pt);;All files (*)")
+            if fn:
+                self.ai_model_path.setText(fn)
+        ai_browse_btn.clicked.connect(_browse_ai_model)
+        ai_ops.addWidget(ai_browse_btn)
+        try_ai_btn = QPushButton("  Try AI  ")
+        try_ai_btn.setStyleSheet("QPushButton { font-size: 11pt; font-weight:bold; color: #1a8cff; }")
+        try_ai_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        try_ai_btn.setToolTip("Run tomocor AI inference to find the best COR and write it to the table")
+        try_ai_btn.clicked.connect(self.try_ai_reconstruction)
+        ai_ops.addWidget(try_ai_btn)
+        main_tab.addLayout(ai_ops)
+
         h_line = QFrame()
         h_line.setFrameShape(QFrame.HLine)  # Vertical line
         h_line.setFrameShadow(QFrame.Sunken)
@@ -2943,6 +2970,71 @@ class TomoGUI(QWidget):
                         self.log_output.append(f"\U0001f9f9 Removed {temp_try}")
                 except Exception as e:
                     self.log_output.append(f'<span style="color:red;">\u26a0\ufe0f Could not remove {temp_try}: {e}</span>')
+
+    def try_ai_reconstruction(self):
+        """Run tomocor infer to find the best COR via AI and write it into the table."""
+        proj_file = self.highlight_scan
+        if not proj_file:
+            self.log_output.append('<span style="color:red;">❌ No file selected</span>')
+            return
+
+        model_path = self.ai_model_path.text().strip()
+        if not model_path or not os.path.exists(model_path):
+            self.log_output.append('<span style="color:red;">❌ Invalid AI model path — set it in the AI Model field</span>')
+            return
+
+        cor_val = self.cor_input.text().strip()
+        try:
+            cor = float(cor_val)
+        except ValueError:
+            self.log_output.append('<span style="color:red;">❌ Invalid COR value — enter a starting COR in the COR field</span>')
+            return
+
+        gpu = str(self.cuda_box_try.value())
+
+        cmd = ["tomocor", "infer",
+               "--file-name", proj_file,
+               "--rotation-axis", str(cor),
+               "--infer-model-path", model_path]
+
+        # Reuse search width, step, nsino from the Reconstruction tab widgets
+        for flag in ["--center-search-width", "--center-search-step", "--nsino"]:
+            if flag in self.param_widgets:
+                kind, w, include_cb, _ = self.param_widgets[flag]
+                val = self._get_widget_value(kind, w)
+                if val is not None and str(val).strip():
+                    cmd += [flag, str(val)]
+
+        code = self.run_command_live(cmd, proj_file=proj_file, job_label="Try AI", wait=True, cuda_devices=gpu)
+
+        if code == 0:
+            data_folder = self.data_path.text().strip()
+            proj_name = os.path.splitext(os.path.basename(proj_file))[0]
+            cor_txt = os.path.join(f"{data_folder}_rec", "try_center", proj_name, "center_of_rotation.txt")
+            if os.path.exists(cor_txt):
+                with open(cor_txt) as f:
+                    lines = [line.strip() for line in f if line.strip()]
+                if lines:
+                    ai_cor = lines[-1]  # use most recent entry
+                    try:
+                        float(ai_cor)
+                        # Update in-memory COR and persist to JSON
+                        self.cor_data[proj_file] = ai_cor
+                        self._save_cor_data(data_folder, self.cor_data)
+                        # Update the COR widget in the table row
+                        if self.highlight_row is not None:
+                            w = self.batch_file_main_table.cellWidget(self.highlight_row, 2)
+                            if w:
+                                w.setText(ai_cor)
+                        self.log_output.append(f'<span style="color:green;">✅ AI COR: {ai_cor} saved for {os.path.basename(proj_file)}</span>')
+                    except ValueError:
+                        self.log_output.append(f'<span style="color:orange;">⚠️ Could not parse AI COR value from {cor_txt}</span>')
+                else:
+                    self.log_output.append('<span style="color:orange;">⚠️ center_of_rotation.txt is empty</span>')
+            else:
+                self.log_output.append(f'<span style="color:orange;">⚠️ center_of_rotation.txt not found at {cor_txt}</span>')
+        else:
+            self.log_output.append(f'<span style="color:red;">❌ Try AI failed for {os.path.basename(proj_file)}</span>')
 
     def _update_full_btn_state(self):
         """Grey out Full button only while the currently selected file is running locally."""
