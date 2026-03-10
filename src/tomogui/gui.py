@@ -300,23 +300,7 @@ class TomoGUI(QWidget):
         # Row 1b - Try AI (tomocor inference)
         ai_ops = QHBoxLayout()
         ai_ops.setSpacing(6)
-        ai_src_label = QLabel("tomocor src:")
-        ai_src_label.setStyleSheet("QLabel { font-size: 10.5pt; }")
-        ai_ops.addWidget(ai_src_label)
-        self.ai_tomocor_src = QLineEdit()
-        self.ai_tomocor_src.setPlaceholderText("Path to tomocor-main/src")
-        self.ai_tomocor_src.setStyleSheet("QLineEdit { font-size: 10pt; }")
-        ai_ops.addWidget(self.ai_tomocor_src, 1)
-        def _browse_ai_src():
-            d = QFileDialog.getExistingDirectory(self, "Select tomocor src directory")
-            if d:
-                self.ai_tomocor_src.setText(d)
-        ai_src_browse = QPushButton("Browse")
-        ai_src_browse.setStyleSheet("QPushButton { font-size: 10pt; }")
-        ai_src_browse.setFixedWidth(65)
-        ai_src_browse.clicked.connect(_browse_ai_src)
-        ai_ops.addWidget(ai_src_browse)
-        ai_model_label = QLabel("Model:")
+        ai_model_label = QLabel("AI Model:")
         ai_model_label.setStyleSheet("QLabel { font-size: 10.5pt; }")
         ai_ops.addWidget(ai_model_label)
         self.ai_model_path = QLineEdit()
@@ -2989,7 +2973,6 @@ class TomoGUI(QWidget):
 
     def try_ai_reconstruction(self):
         """Run tomocor AI inference directly via Python API (no CLI required)."""
-        import sys as _sys
         from pathlib import Path as _Path
 
         proj_file = self.highlight_scan
@@ -3008,11 +2991,6 @@ class TomoGUI(QWidget):
         except ValueError:
             self.log_output.append('<span style="color:red;">❌ Invalid COR value</span>')
             return
-
-        # Add tomocor source to sys.path if provided
-        tomocor_src = self.ai_tomocor_src.text().strip()
-        if tomocor_src and os.path.isdir(tomocor_src) and tomocor_src not in _sys.path:
-            _sys.path.insert(0, tomocor_src)
 
         try:
             from tomocor import GPURec, inference_pipeline
