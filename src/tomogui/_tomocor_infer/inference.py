@@ -17,10 +17,11 @@ def inference_pipeline(args, img_cache, center_of_rotation_cache, out_dir):
     sz = args.infer_window_size
     np.random.seed(seed_number)
     device = torch.device('cuda') if torch.cuda.is_available() else 'cpu'
+    print(f'inference device: {device}  (cuda available: {torch.cuda.is_available()})')
 
     model_ = _make_dinov2_model()
     model = ClassificationModel(model_, embed_dim=model_.embed_dim, num_windows=num_windows, multi_instances=multi_instances)
-    states = torch.load(model_path, map_location='cpu')['state_dict']
+    states = torch.load(model_path, map_location='cpu', weights_only=False)['state_dict']
     states = {(k.replace("module.", "") if "module." in k else k): v for k, v in states.items()}
     model.load_state_dict(states, strict=False)
     model.to(device)

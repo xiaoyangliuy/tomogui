@@ -1,16 +1,45 @@
 name: tomogui
 channels:
+  - pytorch
+  - nvidia
   - conda-forge
   - defaults
+
 dependencies:
   - python=3.11
-  - pyqt=5
-  - numpy>=1.20.0,<1.27
-  - vispy>=0.11.0
-  - pillow>=8.0.0
-  - h5py>=3.0.0
-  - pyqtgraph>=0.12.0
-  - pyopengl>=3.1.0
   - pip
+
+  # CUDA toolkit >= 12.4 required for __nv_fp8_e8m0 support in CuPy/tomocupy
+  - cuda-toolkit=12.4
+  - cuda-version=12.4
+
+  # CuPy for CUDA 12.x (fixes NVRTC FP8 compilation error with driver 12.8)
+  - cupy=13.*
+
+  # Scientific stack — numpy 2.x compatible
+  - numpy>=2.0
+  - scipy>=1.13
+  - h5py>=3.11
+  - pillow>=10.0
+  - numexpr>=2.8
+  - tifffile>=2023.1
+
+  # GUI stack
+  - pyqt=5.*
+  - pyqtgraph>=0.13.3
+  - vispy>=0.14
+  - pyopengl>=3.1
+
+  # PyTorch with CUDA 12 (for Try AI inference)
+  - pytorch>=2.2
+  - pytorch-cuda=12.4
+
+  # Utilities
+  - einops>=0.6
+  - hdf5
+
   - pip:
-    - -e .
+      # tomocupy (GPU tomography reconstruction)
+      - tomocupy
+      # tomogui (this package, editable install from source)
+      - -e .
