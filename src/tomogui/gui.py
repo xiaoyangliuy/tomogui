@@ -316,10 +316,10 @@ class TomoGUI(QWidget):
         ai_browse_btn.setFixedWidth(65)
         ai_browse_btn.clicked.connect(_browse_ai_model)
         ai_ops.addWidget(ai_browse_btn)
-        try_ai_btn = QPushButton("  Try AI  ")
+        try_ai_btn = QPushButton("  AI Reco  ")
         try_ai_btn.setStyleSheet("QPushButton { font-size: 11pt; font-weight:bold; color: #1a8cff; }")
         try_ai_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        try_ai_btn.setToolTip("Run tomocor AI inference to find the best COR and write it to the table")
+        try_ai_btn.setToolTip("Run Try reconstruction, find best COR via AI, then run Full reconstruction")
         try_ai_btn.clicked.connect(self.try_ai_reconstruction)
         ai_ops.addWidget(try_ai_btn)
         main_tab.addLayout(ai_ops)
@@ -3051,12 +3051,16 @@ class TomoGUI(QWidget):
                         if cor_widget:
                             cor_widget.setText(ai_cor)
                     self.log_output.append(f'<span style="color:green;">✅ AI COR: {ai_cor} — saved for {os.path.basename(proj_file)}</span>')
+                    # Run full reconstruction with the AI-predicted COR
+                    self.log_output.append('🚀 Starting full reconstruction with AI COR...')
+                    QApplication.processEvents()
+                    self.full_reconstruction()
                 else:
                     self.log_output.append('<span style="color:orange;">⚠️ center_of_rotation.txt is empty</span>')
             else:
                 self.log_output.append(f'<span style="color:orange;">⚠️ Output not found: {cor_txt}</span>')
         except Exception as e:
-            self.log_output.append(f'<span style="color:red;">❌ Try AI error: {e}</span>')
+            self.log_output.append(f'<span style="color:red;">❌ AI Reco error: {e}</span>')
 
     def _update_full_btn_state(self):
         """Grey out Full button only while the currently selected file is running locally."""
