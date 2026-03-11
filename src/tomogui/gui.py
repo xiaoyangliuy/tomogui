@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
     QScrollArea, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,QFrame,
     QDialog
 )
-from PyQt5.QtCore import Qt, QEvent, QProcess, QEventLoop, QSize, QProcessEnvironment
+from PyQt5.QtCore import Qt, QEvent, QProcess, QEventLoop, QSize, QProcessEnvironment, QThread, pyqtSignal
 from PyQt5.QtGui import QColor
 from pathlib import Path
 
@@ -60,6 +60,49 @@ except ImportError:
 from .theme_manager import ThemeManager
 from .hdf5_viewer import HDF5ImageDividerDialog
 from .batch_progress_window import ProgressWindow
+
+
+class SyncWatcher(QThread):
+    """Background thread that monitors a folder for new, fully-written HDF5 files."""
+    new_file_ready = pyqtSignal(str)   # emits absolute path of the stable new file
+
+    def __init__(self, folder, known_files, check_interval=5, stability_time=15):
+        super().__init__()
+        self.folder = folder
+        self.known_files = set(known_files)
+        self.check_interval = check_interval   # seconds between polls
+        self.stability_time = stability_time   # seconds file size must be unchanged
+        self._stop = False
+
+    def stop(self):
+        self._stop = True
+
+    def run(self):
+        import time
+        pending = {}   # path -> (last_size, first_stable_time)
+        while not self._stop:
+            current = set(glob.glob(os.path.join(self.folder, "*.h5")))
+            now = time.time()
+            for f in current - self.known_files:
+                try:
+                    size = os.path.getsize(f)
+                except OSError:
+                    continue
+                if f not in pending:
+                    pending[f] = (size, now)
+                else:
+                    prev_size, first_seen = pending[f]
+                    if size == prev_size and (now - first_seen) >= self.stability_time:
+                        self.known_files.add(f)
+                        del pending[f]
+                        self.new_file_ready.emit(f)
+                    else:
+                        pending[f] = (size, first_seen)
+            # clean up files that disappeared while pending
+            for f in list(pending):
+                if f not in current:
+                    del pending[f]
+            self.msleep(int(self.check_interval * 1000))
 
 
 class MachineSettingsDialog(QDialog):
@@ -196,6 +239,7 @@ class TomoGUI(QWidget):
         self._running_full_file = None  # track which file is under local full recon
         self.cor_path = None
         self._recon_params_data = None  # per-dataset params cache; None = needs reload
+        self._sync_watcher = None       # SyncWatcher thread
         self.batch_file_main_list = []
 
         # Batch selection state for shift-click
@@ -538,7 +582,20 @@ class TomoGUI(QWidget):
         self.log_output.append("Start tomoGUI")     
         self.log_output.setFixedHeight(200)  # Set a fixed height
         log_box.addWidget(self.log_output)
-        main_tab.addLayout(log_box)   
+        main_tab.addLayout(log_box)
+
+        # Sync Acquisition button (bottom of left panel)
+        sync_row = QHBoxLayout()
+        self.sync_btn = QPushButton("▶  Sync Acquisition")
+        self.sync_btn.setStyleSheet(
+            "QPushButton { font-size: 11pt; font-weight: bold; color: white; "
+            "background-color: #2e7d32; padding: 6px 18px; border-radius: 4px; }"
+            "QPushButton:checked { background-color: #b71c1c; }"
+        )
+        self.sync_btn.setCheckable(True)
+        self.sync_btn.clicked.connect(self._toggle_sync)
+        sync_row.addWidget(self.sync_btn)
+        main_tab.addLayout(sync_row)
 
         # Tab 2: Params (all CLI flags + extra args)
         self._build_params_tab()
@@ -3061,6 +3118,144 @@ class TomoGUI(QWidget):
                 self.log_output.append(f'<span style="color:orange;">⚠️ Output not found: {cor_txt}</span>')
         except Exception as e:
             self.log_output.append(f'<span style="color:red;">❌ AI Reco error: {e}</span>')
+
+    # ------------------------------------------------------------------ #
+    #  Sync Acquisition                                                    #
+    # ------------------------------------------------------------------ #
+
+    def _toggle_sync(self, checked):
+        if checked:
+            self._start_sync()
+        else:
+            self._stop_sync()
+
+    def _start_sync(self):
+        data_folder = self.data_path.text().strip()
+        if not data_folder or not os.path.isdir(data_folder):
+            self.log_output.append('<span style="color:red;">❌ Set a valid data folder before starting Sync</span>')
+            self.sync_btn.setChecked(False)
+            return
+        known = set(glob.glob(os.path.join(data_folder, "*.h5")))
+        self._sync_watcher = SyncWatcher(data_folder, known)
+        self._sync_watcher.new_file_ready.connect(self._on_new_sync_file)
+        self._sync_watcher.start()
+        self.sync_btn.setText("⏹  Stop Sync")
+        self.log_output.append(f'<span style="color:green;">🔄 Sync Acquisition started — watching {data_folder}</span>')
+
+    def _stop_sync(self):
+        if self._sync_watcher:
+            self._sync_watcher.stop()
+            self._sync_watcher.wait(3000)
+            self._sync_watcher = None
+        self.sync_btn.setText("▶  Sync Acquisition")
+        self.sync_btn.setChecked(False)
+        self.log_output.append('🔄 Sync Acquisition stopped.')
+
+    def _on_new_sync_file(self, filepath):
+        """Called on the main thread when a new stable HDF5 file is detected."""
+        self.log_output.append(f'🆕 New file detected: <b>{os.path.basename(filepath)}</b>')
+        QApplication.processEvents()
+
+        # Add to table if not already present, then select it
+        self._add_file_to_table(filepath)
+
+        # Select the row so highlight_scan is set correctly
+        for row in range(self.batch_file_main_table.rowCount()):
+            item = self.batch_file_main_table.item(row, 0)
+            if item and item.toolTip() == filepath:
+                self.batch_file_main_table.selectRow(row)
+                self.on_table_row_clicked(row, 0)
+                break
+
+        QApplication.processEvents()
+
+        # Run AI Reco (try + inference + full)
+        self.try_ai_reconstruction()
+
+        # Run tomolog upload
+        self._run_tomolog_for_file(filepath)
+
+    def _add_file_to_table(self, filepath):
+        """Insert a single file row into the table if it is not already there."""
+        # Check if already present
+        for row in range(self.batch_file_main_table.rowCount()):
+            item = self.batch_file_main_table.item(row, 0)
+            if item and item.toolTip() == filepath:
+                return
+
+        data_folder = self.data_path.text().strip()
+        filename = os.path.basename(filepath)
+        proj_name = os.path.splitext(filename)[0]
+        try_dir = os.path.join(f"{data_folder}_rec", "try_center", proj_name)
+        full_dir = os.path.join(f"{data_folder}_rec", f"{proj_name}_rec")
+        has_try = os.path.isdir(try_dir) and len(glob.glob(os.path.join(try_dir, "*.tiff"))) > 0
+        has_full = os.path.isdir(full_dir) and len(glob.glob(os.path.join(full_dir, "*.tiff"))) > 0
+
+        row = 0  # insert at top (newest first)
+        self.batch_file_main_table.insertRow(row)
+
+        if has_full:
+            row_color, status_text = "green", "Full"
+        elif has_try:
+            row_color, status_text = "orange", "Done try"
+        else:
+            row_color, status_text = "red", "Ready"
+
+        from PyQt5.QtWidgets import QTableWidgetItem as _TWI
+        name_item = _TWI(filename)
+        name_item.setToolTip(filepath)
+        name_item.setForeground(QColor(row_color))
+        self.batch_file_main_table.setItem(row, 0, name_item)
+
+        status_item = _TWI(status_text)
+        status_item.setForeground(QColor(row_color))
+        self.batch_file_main_table.setItem(row, 1, status_item)
+
+        cor_val = self.cor_data.get(filepath, "")
+        cor_widget = QLineEdit(str(cor_val))
+        cor_widget.setAlignment(Qt.AlignCenter)
+        self.batch_file_main_table.setCellWidget(row, 2, cor_widget)
+
+        self.batch_file_main_list.insert(0, {'file': filepath, 'cor_input': cor_widget})
+
+    def _run_tomolog_for_file(self, filepath):
+        """Run tomolog upload for a specific file using current GUI settings."""
+        beamline = self.beamline_box.currentText()
+        cloud = self.cloud_box.currentText()
+        url = self.url_input.text().strip()
+        x = self.x_input.text().strip()
+        y = self.y_input.text().strip()
+        z = self.z_input.text().strip()
+        vmin = self.min_input.text().strip()
+        vmax = self.max_input.text().strip()
+        note_value = self.get_note_value()
+
+        cmd = [
+            "tomolog", "run",
+            "--beamline", beamline,
+            "--file-name", filepath,
+            "--cloud", cloud,
+            "--presentation-url", url,
+            "--idx", x,
+            "--idy", y,
+            "--idz", z,
+            "--note", note_value,
+        ]
+        if vmin:
+            cmd.extend(["--min", vmin])
+        if vmax:
+            cmd.extend(["--max", vmax])
+        extra_params = self.extra_params_input.text().strip()
+        if extra_params:
+            cmd.extend(extra_params.split())
+
+        self.log_output.append(f'📤 Uploading to tomolog: {os.path.basename(filepath)}')
+        QApplication.processEvents()
+        code = self.run_command_live(cmd, proj_file=filepath, job_label="tomolog-sync", wait=True, cuda_devices=None)
+        if code == 0:
+            self.log_output.append(f'<span style="color:green;">✅ Tomolog upload done: {os.path.basename(filepath)}</span>')
+        else:
+            self.log_output.append(f'<span style="color:red;">❌ Tomolog upload failed: {os.path.basename(filepath)}</span>')
 
     def _update_full_btn_state(self):
         """Grey out Full button only while the currently selected file is running locally."""
