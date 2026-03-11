@@ -63,45 +63,54 @@ from .batch_progress_window import ProgressWindow
 
 
 class SyncWatcher(QThread):
-    """Background thread that monitors a folder for new, fully-written HDF5 files."""
-    new_file_ready = pyqtSignal(str)   # emits absolute path of the stable new file
+    """Background thread that monitors a folder for new, fully-written HDF5 files.
 
-    def __init__(self, folder, known_files, check_interval=5, stability_time=15):
+    Completeness is determined by opening the HDF5 file and checking that
+    /exchange/data has the same number of frames as /exchange/theta.
+    This is robust against pauses during acquisition that would fool a
+    simple file-size stability check.
+    """
+    new_file_ready = pyqtSignal(str)   # emits absolute path of the complete file
+    file_progress  = pyqtSignal(str, int, int)  # path, n_done, n_total
+
+    def __init__(self, folder, known_files, check_interval=10):
         super().__init__()
         self.folder = folder
         self.known_files = set(known_files)
         self.check_interval = check_interval   # seconds between polls
-        self.stability_time = stability_time   # seconds file size must be unchanged
         self._stop = False
 
     def stop(self):
         self._stop = True
 
+    @staticmethod
+    def _check_complete(filepath):
+        """Return (n_projections_written, n_angles_expected) or (0, 0) on error."""
+        try:
+            with h5py.File(filepath, 'r') as f:
+                data  = f.get('/exchange/data')
+                theta = f.get('/exchange/theta')
+                if data is None or theta is None:
+                    return 0, 0
+                return int(data.shape[0]), int(theta.shape[0])
+        except Exception:
+            return 0, 0
+
     def run(self):
-        import time
-        pending = {}   # path -> (last_size, first_stable_time)
+        pending = set()   # files seen but not yet complete
         while not self._stop:
             current = set(glob.glob(os.path.join(self.folder, "*.h5")))
-            now = time.time()
-            for f in current - self.known_files:
-                try:
-                    size = os.path.getsize(f)
-                except OSError:
-                    continue
-                if f not in pending:
-                    pending[f] = (size, now)
+            new_files = (current - self.known_files) | pending
+            pending.clear()
+            for f in new_files:
+                n_done, n_total = self._check_complete(f)
+                if n_total > 0 and n_done >= n_total:
+                    self.known_files.add(f)
+                    self.new_file_ready.emit(f)
                 else:
-                    prev_size, first_seen = pending[f]
-                    if size == prev_size and (now - first_seen) >= self.stability_time:
-                        self.known_files.add(f)
-                        del pending[f]
-                        self.new_file_ready.emit(f)
-                    else:
-                        pending[f] = (size, first_seen)
-            # clean up files that disappeared while pending
-            for f in list(pending):
-                if f not in current:
-                    del pending[f]
+                    pending.add(f)
+                    if n_total > 0:
+                        self.file_progress.emit(f, n_done, n_total)
             self.msleep(int(self.check_interval * 1000))
 
 
@@ -3138,6 +3147,11 @@ class TomoGUI(QWidget):
         known = set(glob.glob(os.path.join(data_folder, "*.h5")))
         self._sync_watcher = SyncWatcher(data_folder, known)
         self._sync_watcher.new_file_ready.connect(self._on_new_sync_file)
+        self._sync_watcher.file_progress.connect(
+            lambda f, n, t: self.log_output.append(
+                f'⏳ {os.path.basename(f)}: {n}/{t} projections written'
+            )
+        )
         self._sync_watcher.start()
         self.sync_btn.setText("⏹  Stop Sync")
         self.log_output.append(f'<span style="color:green;">🔄 Sync Acquisition started — watching {data_folder}</span>')
