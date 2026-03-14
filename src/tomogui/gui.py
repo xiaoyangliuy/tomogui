@@ -1,12 +1,6 @@
 import os, glob, json
 import numpy as np
 
-# Configure OpenGL for remote display BEFORE importing VisPy
-# This helps with SSH X11 forwarding and remote displays
-if 'LIBGL_ALWAYS_SOFTWARE' not in os.environ:
-    os.environ['LIBGL_ALWAYS_SOFTWARE'] = '1'
-if 'MESA_GL_VERSION_OVERRIDE' not in os.environ:
-    os.environ['MESA_GL_VERSION_OVERRIDE'] = '3.3'
 # Disable vsync for better remote performance
 if 'vblank_mode' not in os.environ:
     os.environ['vblank_mode'] = '0'
@@ -42,6 +36,26 @@ except ImportError:
     print("Warning: VisPy not available. Install with: pip install vispy")
     print("Falling back to slower rendering...")
     VISPY_AVAILABLE = False
+
+# Auto-detect SSH X11 forwarding: VisPy/OpenGL context creation fails without VirtualGL.
+# VirtualGL sets VGL_DISPLAY; absent that, fall back to the pyqtgraph software renderer.
+if VISPY_AVAILABLE:
+    _is_ssh = bool(os.environ.get('SSH_CONNECTION') or
+                   os.environ.get('SSH_CLIENT') or
+                   os.environ.get('SSH_TTY'))
+    _has_vgl = bool(os.environ.get('VGL_DISPLAY') or os.environ.get('VGL_ISACTIVE'))
+    if _is_ssh and not _has_vgl:
+        print("SSH X11 forwarding detected: switching to pyqtgraph renderer (VisPy/OpenGL unavailable)")
+        VISPY_AVAILABLE = False
+
+# PyQtGraph: pure-software renderer that works over SSH X11 forwarding
+try:
+    import pyqtgraph as pg
+    import matplotlib.cm as _mpl_cm
+    pg.setConfigOptions(useOpenGL=False, imageAxisOrder='row-major')
+    PG_AVAILABLE = True
+except ImportError:
+    PG_AVAILABLE = False
 
 from .theme_manager import ThemeManager
 from .hdf5_viewer import HDF5ImageDividerDialog
@@ -179,7 +193,9 @@ class TomoGUI(QWidget):
         self.highlight_scan = None
         self.highlight_row = None
         self._current_source_file = None
+        self._running_full_file = None  # track which file is under local full recon
         self.cor_path = None
+        self._recon_params_data = None  # per-dataset params cache; None = needs reload
         self.batch_file_main_list = []
 
         # Batch selection state for shift-click
@@ -531,31 +547,14 @@ class TomoGUI(QWidget):
         toolbar_row = QHBoxLayout()
         toolbar_row.setSpacing(8)
 
-        # Check if VisPy is available
-        if not VISPY_AVAILABLE:
-            error_label = QLabel("ERROR: VisPy not installed!\n\nPlease install with:\n  pip install vispy PyOpenGL")
-            error_label.setStyleSheet("color: red; font-size: 14pt; font-weight: bold; padding: 20px;")
-            error_label.setAlignment(Qt.AlignCenter)
-            toolbar_row.addWidget(error_label)
-            right_layout.addLayout(toolbar_row)
-            main_layout.addLayout(right_layout, 8)
-            self.setLayout(main_layout)
-            return
-
-        # VisPy canvas setup
-        try:
-            self.canvas = scene.SceneCanvas(keys='interactive', show=False)
-        except Exception as e:
-            # If canvas creation fails, show error and provide workaround
+        # Neither VisPy nor PyQtGraph available — show a hard error
+        if not VISPY_AVAILABLE and not PG_AVAILABLE:
             error_label = QLabel(
-                f"ERROR: VisPy canvas creation failed!\n\n"
-                f"Error: {str(e)}\n\n"
-                f"If using SSH/remote display, try:\n"
-                f"  export LIBGL_ALWAYS_SOFTWARE=1\n"
-                f"  export MESA_GL_VERSION_OVERRIDE=3.3\n"
-                f"Then restart tomogui"
+                "ERROR: No renderer available!\n\n"
+                "Install VisPy for GPU rendering:\n  pip install vispy PyOpenGL\n\n"
+                "Or install PyQtGraph for SSH/software rendering:\n  pip install pyqtgraph matplotlib"
             )
-            error_label.setStyleSheet("color: red; font-size: 11pt; padding: 20px;")
+            error_label.setStyleSheet("color: red; font-size: 14pt; font-weight: bold; padding: 20px;")
             error_label.setAlignment(Qt.AlignCenter)
             error_label.setWordWrap(True)
             toolbar_row.addWidget(error_label)
@@ -563,13 +562,8 @@ class TomoGUI(QWidget):
             main_layout.addLayout(right_layout, 8)
             self.setLayout(main_layout)
             return
-        self.view = self.canvas.central_widget.add_view()
-        self.view.camera = scene.PanZoomCamera(aspect=1) #
-        self.view.camera.flip = (False, True, False)  # Flip Y for image coords
-        self.image_visual = visuals.Image(cmap='grays', parent=self.view.scene)
-        self.canvas_widget = self.canvas.native
 
-        # State for vispy
+        # Shared canvas state
         self._last_camera_rect = None
         self._last_image_shape = None
         self.roi_extent = None
@@ -577,10 +571,39 @@ class TomoGUI(QWidget):
         self._roi_visual = None
         self._roi_start = None
 
-        # Connect vispy mouse events
-        self.canvas.events.mouse_move.connect(self._on_vispy_mouse_move)
-        self.canvas.events.mouse_press.connect(self._on_vispy_mouse_click)
-        self.canvas.events.mouse_release.connect(self._on_vispy_mouse_release)
+        if VISPY_AVAILABLE:
+            # --- VisPy canvas (GPU-accelerated, requires OpenGL) ---
+            try:
+                self.canvas = scene.SceneCanvas(keys='interactive', show=False)
+            except Exception as e:
+                print(f"VisPy canvas creation failed: {e}. Falling back to pyqtgraph.")
+                globals()['VISPY_AVAILABLE'] = False
+
+        if VISPY_AVAILABLE:
+            self.view = self.canvas.central_widget.add_view()
+            self.view.camera = scene.PanZoomCamera(aspect=1)
+            self.view.camera.flip = (False, True, False)  # row-0 at top
+            self.image_visual = visuals.Image(cmap='grays', parent=self.view.scene)
+            self.canvas_widget = self.canvas.native
+            self.canvas.events.mouse_move.connect(self._on_vispy_mouse_move)
+            self.canvas.events.mouse_press.connect(self._on_vispy_mouse_click)
+            self.canvas.events.mouse_release.connect(self._on_vispy_mouse_release)
+        else:
+            # --- PyQtGraph canvas (software renderer, works over SSH X11) ---
+            self._pg_image_item = pg.ImageItem()
+            self._pg_view_box = pg.ViewBox()
+            self._pg_view_box.setAspectLocked(True)
+            self._pg_view_box.invertY(True)
+            self._pg_layout = pg.GraphicsLayoutWidget()
+            self._pg_layout.addItem(self._pg_view_box)
+            self._pg_view_box.addItem(self._pg_image_item)
+            self._pg_roi_item = None
+            self.canvas_widget = self._pg_layout
+            # Mouse coordinate tracking via SignalProxy (rate-limited)
+            self._pg_proxy = pg.SignalProxy(
+                self._pg_image_item.scene().sigMouseMoved,
+                rateLimit=30, slot=self._pg_mouse_moved
+            )
 
         # Coordinate label
         coord_label = QLabel("(x,y):val ")
@@ -592,7 +615,7 @@ class TomoGUI(QWidget):
         self.coord_label.setStyleSheet("font-size: 11pt;")
         toolbar_row.addWidget(self.coord_label)
 
-        #slice number
+        # Slice number
         slice_label = QLabel("z: ")
         slice_label.setFixedWidth(30)
         slice_label.setStyleSheet("font-size: 11pt;")
@@ -673,7 +696,19 @@ class TomoGUI(QWidget):
         self.canvas_widget.installEventFilter(self)
 
         canvas_slider_frame = QVBoxLayout()
-        canvas_slider_frame.addWidget(self.canvas_widget)
+        if not VISPY_AVAILABLE:
+            # Histogram LUT widget for manual level adjustment (pyqtgraph only)
+            self._pg_hist = pg.HistogramLUTWidget(orientation='vertical')
+            self._pg_hist.setImageItem(self._pg_image_item)
+            self._pg_hist.setMinimumWidth(100)
+            self._pg_hist.setMaximumWidth(130)
+            self._pg_hist.item.sigLevelsChanged.connect(self._pg_hist_levels_changed)
+            canvas_row = QHBoxLayout()
+            canvas_row.addWidget(self.canvas_widget, 1)
+            canvas_row.addWidget(self._pg_hist)
+            canvas_slider_frame.addLayout(canvas_row)
+        else:
+            canvas_slider_frame.addWidget(self.canvas_widget)
         slider_layout = QHBoxLayout()
         self.slice_slider = QSlider(Qt.Horizontal)
         self.slice_slider.setStyleSheet("""
@@ -683,6 +718,9 @@ class TomoGUI(QWidget):
         """)
         slider_layout.addWidget(QLabel("Image Index:"))
         slider_layout.addWidget(self.slice_slider)
+        self.filename_label = QLabel("")
+        self.filename_label.setStyleSheet("font-size: 10pt; color: #aaa; padding-left: 6px;")
+        slider_layout.addWidget(self.filename_label)
         canvas_slider_frame.addLayout(slider_layout)
         right_layout.addLayout(canvas_slider_frame, 8)
 
@@ -1836,10 +1874,14 @@ class TomoGUI(QWidget):
         func_box.addWidget(self.use_conf_box)
         load_config_btn = QPushButton("Load Config")
         save_config_btn = QPushButton("Save Config")
+        save_params_btn = QPushButton("Save Params")
+        save_params_btn.setToolTip("Save all current GUI reconstruction parameters for the selected dataset")
         load_config_btn.clicked.connect(self.load_config)
         save_config_btn.clicked.connect(self.save_config)
+        save_params_btn.clicked.connect(self._save_current_scan_params)
         func_box.addWidget(load_config_btn)
         func_box.addWidget(save_config_btn)
+        func_box.addWidget(save_params_btn)
         config_main.addLayout(func_box)
         #left frame for Try
         left_try_box = QGroupBox("Try Recon Config")
@@ -2058,8 +2100,12 @@ class TomoGUI(QWidget):
         if VISPY_AVAILABLE and self._current_img is not None:
             self.image_visual.cmap = self.current_cmap
             self.canvas.update()
-        else:
-            self.refresh_current_image()
+        elif not VISPY_AVAILABLE and self._current_img is not None:
+            try:
+                lut = (_mpl_cm.get_cmap(self.current_cmap)(np.linspace(0, 1, 256)) * 255).astype(np.uint8)
+                self._pg_image_item.setLookupTable(lut[:, :3])
+            except Exception:
+                pass
 
     def update_vmin_vmax(self): #link to min/max input
         try:
@@ -2076,8 +2122,8 @@ class TomoGUI(QWidget):
         if VISPY_AVAILABLE and self._current_img is not None and self.vmin is not None and self.vmax is not None:
             self.image_visual.clim = (self.vmin, self.vmax)
             self.canvas.update()
-        else:
-            self.refresh_current_image()
+        elif not VISPY_AVAILABLE and self._current_img is not None and self.vmin is not None and self.vmax is not None:
+            self._pg_apply_levels(self.vmin, self.vmax)
 
     def refresh_current_image(self):
         if self.full_files and 0 <= self.slice_slider.value() < len(self.full_files):
@@ -2164,7 +2210,12 @@ class TomoGUI(QWidget):
         if os.path.exists(json_path):
             try:
                 with open(json_path, 'r') as f:
-                    cor_data = json.load(f)
+                    raw = json.load(f)
+                    # Normalise: values may be lists [cor] or bare numbers/strings
+                    cor_data = {
+                        k: str(v[0]) if isinstance(v, list) and v else str(v)
+                        for k, v in raw.items()
+                    }
                     self.log_output.append(f'<span style="color:green;">✅ Loaded {len(cor_data)} COR values from rot_cen.json</span>')
                     return cor_data, list(cor_data.keys())
             except json.JSONDecodeError as e:
@@ -2196,6 +2247,7 @@ class TomoGUI(QWidget):
         self.batch_file_main_table.setRowCount(0)
         self.batch_file_main_list = []
         self.batch_last_clicked_row = None
+        self._recon_params_data = None  # force reload for new folder
 
         # Load COR data from JSON or CSV (CSV takes priority if both exist)
         self.cor_data, fns = self._load_cor_data(table_folder, h5_files)
@@ -2250,7 +2302,12 @@ class TomoGUI(QWidget):
 
             # COR value (editable)
             if f in fns:
-                cor_input = QLineEdit(self.cor_data[f])
+                cor_val = self.cor_data[f]
+                if isinstance(cor_val, list):
+                    cor_val = str(cor_val[0]) if cor_val else ""
+                else:
+                    cor_val = str(cor_val)
+                cor_input = QLineEdit(cor_val)
             else:
                 cor_input = QLineEdit()
             cor_input.setPlaceholderText("COR value")
@@ -2306,6 +2363,7 @@ class TomoGUI(QWidget):
             self.highlight_scan = h5_files[0] #always the latest coming in scan
             self.highlight_row = 0
             self.log_output.append(f'Clicked on {self.highlight_scan}')
+            self._load_scan_params(self.highlight_scan)
 
     def _save_cor_data(self, data_folder, cor_data_dict):
         """
@@ -2345,6 +2403,142 @@ class TomoGUI(QWidget):
                 self.log_output.append(f'<span style="color:green;">✔ COR values saved to JSON</span>')
         except Exception as e:
             self.log_output.append(f'<span style="color:red;">❌ Failed to write JSON: {e}</span>')
+
+    # ===== PER-DATASET RECONSTRUCTION PARAMS =====
+
+    @staticmethod
+    def _get_widget_value(kind, w):
+        if kind in ("spin", "dspin"):
+            return w.value()
+        elif kind == "combo":
+            return w.currentText()
+        elif kind == "line":
+            return w.text()
+        elif kind == "check":
+            return w.isChecked()
+        return None
+
+    @staticmethod
+    def _set_widget_value(kind, w, val):
+        try:
+            if kind == "spin":
+                w.setValue(int(val))
+            elif kind == "dspin":
+                w.setValue(float(val))
+            elif kind == "combo":
+                idx = w.findText(str(val))
+                if idx >= 0:
+                    w.setCurrentIndex(idx)
+            elif kind == "line":
+                w.setText(str(val))
+            elif kind == "check":
+                w.setChecked(bool(val))
+        except Exception:
+            pass
+
+    def _gather_all_gui_params(self):
+        """Collect all current GUI reconstruction parameters into a dict."""
+        params = {
+            "recon_way":       self.recon_way_box.currentText(),
+            "recon_way_full":  self.recon_way_box_full.currentText(),
+            "cor_method":      self.cor_method_box.currentText(),
+            "cor_method_full": self.cor_full_method.currentText(),
+            "cuda_try":        self.cuda_box_try.value(),
+            "cuda_full":       self.cuda_full_box.value(),
+            "use_conf":        self.use_conf_box.isChecked(),
+            "config_try":      self.config_editor_try.toPlainText(),
+            "config_full":     self.config_editor_full.toPlainText(),
+        }
+        for tab_key, widget_dict in [
+            ("params",      self.param_widgets),
+            ("bhard",       self.bhard_widgets),
+            ("phase",       self.phase_widgets),
+            ("rings",       self.rings_widgets),
+            ("geometry",    self.Geometry_widgets),
+            ("data",        self.data_widgets),
+            ("performance", self.perf_widgets),
+        ]:
+            tab_data = {}
+            for flag, (kind, w, include_cb, _default) in widget_dict.items():
+                val = self._get_widget_value(kind, w)
+                inc = include_cb.isChecked() if include_cb is not None else None
+                tab_data[flag] = {"value": val, "include": inc}
+            params[tab_key] = tab_data
+        return params
+
+    def _apply_params_to_gui(self, params):
+        """Apply a saved params dict to all GUI reconstruction widgets."""
+        try:
+            self.recon_way_box.setCurrentText(params.get("recon_way", "recon"))
+            self.recon_way_box_full.setCurrentText(params.get("recon_way_full", "recon"))
+            self.cor_method_box.setCurrentText(params.get("cor_method", "manual"))
+            self.cor_full_method.setCurrentText(params.get("cor_method_full", "manual"))
+            self.cuda_box_try.setValue(int(params.get("cuda_try", 0)))
+            self.cuda_full_box.setValue(int(params.get("cuda_full", 0)))
+            self.use_conf_box.setChecked(bool(params.get("use_conf", False)))
+            self.config_editor_try.setPlainText(params.get("config_try", ""))
+            self.config_editor_full.setPlainText(params.get("config_full", ""))
+            for tab_key, widget_dict in [
+                ("params",      self.param_widgets),
+                ("bhard",       self.bhard_widgets),
+                ("phase",       self.phase_widgets),
+                ("rings",       self.rings_widgets),
+                ("geometry",    self.Geometry_widgets),
+                ("data",        self.data_widgets),
+                ("performance", self.perf_widgets),
+            ]:
+                tab_data = params.get(tab_key, {})
+                for flag, (kind, w, include_cb, _default) in widget_dict.items():
+                    if flag in tab_data:
+                        entry = tab_data[flag]
+                        self._set_widget_value(kind, w, entry.get("value"))
+                        if include_cb is not None and entry.get("include") is not None:
+                            include_cb.setChecked(bool(entry["include"]))
+        except Exception as e:
+            self.log_output.append(f'<span style="color:orange;">⚠️ Error applying params: {e}</span>')
+
+    def _load_recon_params_file(self, data_folder):
+        """Load recon_params.json from data folder. Returns dict keyed by full file path."""
+        path = os.path.join(data_folder, "recon_params.json")
+        if os.path.exists(path):
+            try:
+                with open(path, "r") as f:
+                    return json.load(f)
+            except Exception as e:
+                self.log_output.append(f'<span style="color:orange;">⚠️ Could not load recon_params.json: {e}</span>')
+        return {}
+
+    def _save_recon_params_file(self, data_folder, params_dict):
+        """Save recon_params.json to data folder."""
+        path = os.path.join(data_folder, "recon_params.json")
+        try:
+            with open(path, "w") as f:
+                json.dump(params_dict, f, indent=2)
+        except Exception as e:
+            self.log_output.append(f'<span style="color:red;">❌ Could not save recon_params.json: {e}</span>')
+
+    def _save_current_scan_params(self):
+        """Save current GUI params for the highlighted scan to recon_params.json."""
+        if not self.highlight_scan:
+            return
+        data_folder = self.data_path.text().strip()
+        if not data_folder or not os.path.isdir(data_folder):
+            return
+        if self._recon_params_data is None:
+            self._recon_params_data = self._load_recon_params_file(data_folder)
+        self._recon_params_data[self.highlight_scan] = self._gather_all_gui_params()
+        self._save_recon_params_file(data_folder, self._recon_params_data)
+
+    def _load_scan_params(self, proj_file):
+        """Load and apply saved GUI params for proj_file, if they exist."""
+        data_folder = self.data_path.text().strip()
+        if not data_folder or not os.path.isdir(data_folder):
+            return
+        if self._recon_params_data is None:
+            self._recon_params_data = self._load_recon_params_file(data_folder)
+        if proj_file in self._recon_params_data:
+            self._apply_params_to_gui(self._recon_params_data[proj_file])
+            self.log_output.append(f'✅ Loaded params for {os.path.basename(proj_file)}')
 
     def _on_main_cor_edited(self, file_path:str, row:int):
         """
@@ -2390,6 +2584,9 @@ class TomoGUI(QWidget):
                 self.proj_file_box.addItem(os.path.basename(f), f)
 
     def on_table_row_clicked(self, row, column):
+        # Save current GUI params for the previously selected dataset before switching
+        if self.highlight_scan:
+            self._save_current_scan_params()
         # Get the filename from the clicked row
         filename_item = self.batch_file_main_table.item(row, 1)  # Column 1 contains the filename
         filename = filename_item.text()
@@ -2398,8 +2595,10 @@ class TomoGUI(QWidget):
             if file_info['filename'] == filename:
                 self.highlight_scan = file_info['path']
                 self.highlight_row = row #gives index of the self.batch_file_table_list
-        # Log or print the selected file for debugging
+        self._update_full_btn_state()  # grey out only if this file is running locally
         self.log_output.append(f'Click on {self.highlight_scan} now for other operations')
+        # Load saved params for newly selected dataset (if any)
+        self._load_scan_params(self.highlight_scan)
 
     def load_config(self):
         dialog = QFileDialog(self)
@@ -2745,71 +2944,86 @@ class TomoGUI(QWidget):
                 except Exception as e:
                     self.log_output.append(f'<span style="color:red;">\u26a0\ufe0f Could not remove {temp_try}: {e}</span>')
 
+    def _update_full_btn_state(self):
+        """Grey out Full button only while the currently selected file is running locally."""
+        if self._running_full_file and self.highlight_scan == self._running_full_file:
+            self.full_btn.setEnabled(False)
+        else:
+            self.full_btn.setEnabled(True)
+
     def full_reconstruction(self):
         self.full_btn.setEnabled(False)
         proj_file = self.highlight_scan
-        pn = os.path.splitext(os.path.basename(proj_file))[0]
-        recon_way = self.recon_way_box_full.currentText()  
-        highlight_row = self.highlight_row
-        cor_method = self.cor_full_method.currentText()
-        gpu = str(self.cuda_full_box.value())
-        if cor_method == "manual":
-            try:
-                cor_value = float(self.batch_file_main_list[highlight_row]['cor_input'].text().strip())
-            except ValueError:
-                self.log_output.append(f'<span style="color:red;">\u274c[ERROR] Invalid Full COR value</span>')
-                return
-        if self.use_conf_box.isChecked():
-            self.log_output.append("\u26a0\ufe0f You are using config file, only recon type, filename, rot axis from GUI")
-            config_text = self.config_editor_full.toPlainText()
-            if not config_text.strip():
-                self.log_output.append(f'<span style="color:red;">\u26a0\ufe0f No text in conf, stop</span>')
-                return
-            temp_full = os.path.join(self.data_path.text(), "temp_full.conf")
-            with open(temp_full, "w") as f:
-                f.write(config_text)
-            # Base command
-            cmd = ["tomocupy", str(recon_way),
-             "--reconstruction-type", "full",
-             "--config", temp_full, 
-             "--file-name", proj_file, 
-             "--rotation-axis", str(cor_value)]    
-        else:
-            self.log_output.append('\u26a0\ufe0f You are using params from GUI')
-            if cor_method == "auto":
-                # Base command
-                cmd = ["tomocupy", str(recon_way),
-                "--reconstruction-type", "full",
-                "--file-name", proj_file, 
-                "--rotation-axis-auto", cor_method]
-            elif cor_method == "manual":
-                # Base command
-                cmd = ["tomocupy", str(recon_way),
-                "--reconstruction-type", "full",
-                "--file-name", proj_file, 
-                "--rotation-axis-auto", cor_method,
-                "--rotation-axis", str(cor_value)]
-                # Append tabs selections
-            cmd += self._gather_params_args()
-            cmd += self._gather_rings_args()
-            cmd += self._gather_bhard_args()
-            cmd += self._gather_phase_args()
-            cmd += self._gather_Geometry_args()        
-            cmd += self._gather_Data_args()                
-            cmd += self._gather_Performance_args()
-                                
-        code = self.run_command_live(cmd, proj_file=proj_file, job_label="Full recon", wait=True, cuda_devices=gpu)
+        # Mark this file as running locally and grey out button only for it
+        self._running_full_file = proj_file
+        self._update_full_btn_state()
         try:
-            if code == 0:
-                fullpath = os.path.join(f"{self.data_path.text()}_rec", f"{pn}_rec")
-                full_files = glob.glob(os.path.join(fullpath, "*.tiff"))
-                num_1 = int(Path(full_files[0]).stem.split("_")[-1])
-                num_2 = int(Path(full_files[-1]).stem.split("_")[-1])
-                self._update_row(row=highlight_row,color='green',status=f'Full {num_1}-{num_2}') #change table content and self.batch_file_list
-                self.log_output.append(f'<span style="color:green;">\u2705 Done full recon {proj_file}</span>')
-                del fullpath, full_files, num_1, num_2, pn
+            pn = os.path.splitext(os.path.basename(proj_file))[0]
+            recon_way = self.recon_way_box_full.currentText()
+            highlight_row = self.highlight_row
+            cor_method = self.cor_full_method.currentText()
+            gpu = str(self.cuda_full_box.value())
+            if cor_method == "manual":
+                try:
+                    cor_value = float(self.batch_file_main_list[highlight_row]['cor_input'].text().strip())
+                except ValueError:
+                    self.log_output.append('<span style="color:red;">\u274c[ERROR] Invalid Full COR value</span>')
+                    return
+            if self.use_conf_box.isChecked():
+                self.log_output.append("\u26a0\ufe0f You are using config file, only recon type, filename, rot axis from GUI")
+                config_text = self.config_editor_full.toPlainText()
+                if not config_text.strip():
+                    self.log_output.append('<span style="color:red;">\u26a0\ufe0f No text in conf, stop</span>')
+                    return
+                temp_full = os.path.join(self.data_path.text(), "temp_full.conf")
+                with open(temp_full, "w") as f:
+                    f.write(config_text)
+                cmd = ["tomocupy", str(recon_way),
+                       "--reconstruction-type", "full",
+                       "--config", temp_full,
+                       "--file-name", proj_file,
+                       "--rotation-axis", str(cor_value)]
             else:
-                self.log_output.append(f'<span style="color:red;">\u274c Full recon {proj_file} failed</span>')
+                self.log_output.append('\u26a0\ufe0f You are using params from GUI')
+                if cor_method == "auto":
+                    cmd = ["tomocupy", str(recon_way),
+                           "--reconstruction-type", "full",
+                           "--file-name", proj_file,
+                           "--rotation-axis-auto", cor_method]
+                elif cor_method == "manual":
+                    cmd = ["tomocupy", str(recon_way),
+                           "--reconstruction-type", "full",
+                           "--file-name", proj_file,
+                           "--rotation-axis-auto", cor_method,
+                           "--rotation-axis", str(cor_value)]
+                cmd += self._gather_params_args()
+                cmd += self._gather_rings_args()
+                cmd += self._gather_bhard_args()
+                cmd += self._gather_phase_args()
+                cmd += self._gather_Geometry_args()
+                cmd += self._gather_Data_args()
+                cmd += self._gather_Performance_args()
+
+            code = self.run_command_live(cmd, proj_file=proj_file, job_label="Full recon", wait=True, cuda_devices=gpu)
+            try:
+                if code == 0:
+                    fullpath = os.path.join(f"{self.data_path.text()}_rec", f"{pn}_rec")
+                    full_files = glob.glob(os.path.join(fullpath, "*.tiff"))
+                    num_1 = int(Path(full_files[0]).stem.split("_")[-1])
+                    num_2 = int(Path(full_files[-1]).stem.split("_")[-1])
+                    self._update_row(row=highlight_row, color='green', status=f'Full {num_1}-{num_2}')
+                    self.log_output.append(f'<span style="color:green;">\u2705 Done full recon {proj_file}</span>')
+                    del fullpath, full_files, num_1, num_2, pn
+                else:
+                    self.log_output.append(f'<span style="color:red;">\u274c Full recon {proj_file} failed</span>')
+            finally:
+                if self.use_conf_box.isChecked():
+                    try:
+                        if os.path.exists(temp_full):
+                            os.remove(temp_full)
+                            self.log_output.append(f"\U0001f9f9 Removed {temp_full}")
+                    except Exception as e:
+                        self.log_output.append(f'<span style="color:red;">\u26a0\ufe0f Could not remove {temp_full}: {e}</span>')
         finally:
             if self.use_conf_box.isChecked():
                 try:
@@ -2940,10 +3154,10 @@ class TomoGUI(QWidget):
         try_dir = os.path.join(f"{data_folder}_rec", "try_center", proj_name)
         self.preview_files = [] #clean it before use
         self.preview_files = sorted(glob.glob(os.path.join(try_dir, "*.tiff")))
-        self.log_output.append(f"first: {self.preview_files[0]}; last: {self.preview_files[-1]}")
         if not self.preview_files:
-            self.log_output.append(f'<span style="color:red;">\u274cNo try folder</span>')
+            self.log_output.append(f'<span style="color:red;">\u274c No try reconstruction found in {try_dir}</span>')
             return
+        self.log_output.append(f"first: {self.preview_files[0]}; last: {self.preview_files[-1]}")
         self._clear_roi()
         self._reset_view_state()
         #self.set_image_scale(self.preview_files[0])
@@ -2953,9 +3167,7 @@ class TomoGUI(QWidget):
             pass
         self.slice_slider.setMaximum(len(self.preview_files) - 1)
         self.slice_slider.valueChanged.connect(self.update_try_slice)
-        # Store the source filename for display
-        #self._current_source_file = os.path.basename(proj_file)
-        #self._current_view_mode = "try"
+        self._try_proj_name = proj_name
         self.update_try_slice()  
 
     def view_full_reconstruction(self):
@@ -2964,10 +3176,10 @@ class TomoGUI(QWidget):
         proj_name = os.path.splitext(os.path.basename(proj_file))[0]
         full_dir = os.path.join(f"{data_folder}_rec", f"{proj_name}_rec")
         self.full_files = sorted(glob.glob(os.path.join(full_dir, "*.tiff")))
-        self.log_output.append(f"first: {self.full_files[0]}; last: {self.full_files[-1]}")
         if not self.full_files:
-            self.log_output.append(f'<span style="color:red;">\u26a0\ufe0f No full reconstruction images found</span>')
+            self.log_output.append(f'<span style="color:red;">\u274c No full reconstruction found in {full_dir}</span>')
             return
+        self.log_output.append(f"first: {self.full_files[0]}; last: {self.full_files[-1]}")
         self._clear_roi()
         self._reset_view_state()
         #self.set_image_scale(self.full_files[0])
@@ -2993,9 +3205,22 @@ class TomoGUI(QWidget):
 
     # ===== ROI AND CONTRAST =====
     def draw_box(self):
-        """Enable interactive ROI drawing with VisPy."""
+        """Enable interactive ROI drawing."""
         if self._current_img is None:
             self.log_output.append("\u26a0\ufe0f No image loaded to draw box.")
+            return
+
+        if not VISPY_AVAILABLE:
+            # PyQtGraph: place a resizable RectROI on the image
+            h, w = self._current_img.shape[:2]
+            if self._pg_roi_item is not None:
+                self._pg_view_box.removeItem(self._pg_roi_item)
+            self._pg_roi_item = pg.RectROI([w // 4, h // 4], [w // 2, h // 2],
+                                           pen=pg.mkPen('r', width=2))
+            self._pg_roi_item.sigRegionChanged.connect(self._pg_roi_changed)
+            self._pg_view_box.addItem(self._pg_roi_item)
+            self._pg_roi_changed(self._pg_roi_item)
+            self.log_output.append("Drag the red ROI handles to resize/move it.")
             return
 
         self._drawing_roi = True
@@ -3039,9 +3264,56 @@ class TomoGUI(QWidget):
             f"y[{int(self.roi_extent[2])}:{int(self.roi_extent[3])}]"
         )
 
+    # ---- PyQtGraph-specific helpers ----
+
+    def _pg_mouse_moved(self, event):
+        """Show pixel coordinates under the cursor (pyqtgraph path)."""
+        pos = event[0]  # SignalProxy wraps pos in a tuple
+        if not self._pg_image_item.sceneBoundingRect().contains(pos):
+            if hasattr(self, 'coord_label'):
+                self.coord_label.setText("")
+            return
+        mouse_pt = self._pg_view_box.mapSceneToView(pos)
+        x, y = int(mouse_pt.x()), int(mouse_pt.y())
+        if self._current_img is not None:
+            h, w = self._current_img.shape[:2]
+            if 0 <= x < w and 0 <= y < h:
+                val = self._current_img[y, x]
+                if hasattr(self, 'coord_label'):
+                    self.coord_label.setText(f"({x},{y}): {float(val):.5f}")
+                return
+        if hasattr(self, 'coord_label'):
+            self.coord_label.setText("")
+
+    def _pg_roi_changed(self, roi):
+        """Update roi_extent when the pyqtgraph RectROI is moved/resized."""
+        pos = roi.pos()
+        size = roi.size()
+        x0, y0 = pos.x(), pos.y()
+        x1, y1 = x0 + size.x(), y0 + size.y()
+        self.roi_extent = (min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1))
+
+    def _pg_apply_levels(self, vmin, vmax):
+        """Update display levels on the pyqtgraph ImageItem without reloading the image."""
+        self._pg_image_item.setLevels([vmin, vmax])
+        # Sync the histogram widget so its level lines match
+        if hasattr(self, '_pg_hist'):
+            self._pg_hist.item.setLevels(vmin, vmax)
+        self.min_input.setText(str(round(vmin, 5)))
+        self.max_input.setText(str(round(vmax, 5)))
+
+    def _pg_hist_levels_changed(self):
+        """Sync vmin/vmax when the user drags the histogram level lines."""
+        vmin, vmax = self._pg_hist.item.getLevels()
+        self.vmin, self.vmax = float(vmin), float(vmax)
+        self.min_input.setText(str(round(self.vmin, 5)))
+        self.max_input.setText(str(round(self.vmax, 5)))
+
+    # ---- VisPy-only helpers ----
+
     def _draw_roi_visual(self):
-        """Draw ROI rectangle using vispy Line visual"""
-        if self.roi_extent is None:
+        """Draw ROI rectangle using vispy Line visual (VisPy path only)."""
+        if not VISPY_AVAILABLE or self.roi_extent is None:
             return
 
         x0, x1, y0, y1 = self.roi_extent
@@ -3069,6 +3341,13 @@ class TomoGUI(QWidget):
 
     def _clear_roi(self):
         """Hide/remove any active ROI."""
+        if not VISPY_AVAILABLE:
+            if self._pg_roi_item is not None:
+                self._pg_view_box.removeItem(self._pg_roi_item)
+                self._pg_roi_item = None
+            self.roi_extent = None
+            self._drawing_roi = False
+            return
         if self._roi_visual is not None:
             self._roi_visual.parent = None
             self._roi_visual = None
@@ -3149,8 +3428,8 @@ class TomoGUI(QWidget):
         if VISPY_AVAILABLE and self._current_img is not None:
             self.image_visual.clim = (self.vmin, self.vmax)
             self.canvas.update()
-        else:
-            self.refresh_current_image()
+        elif not VISPY_AVAILABLE and self._current_img is not None:
+            self._pg_apply_levels(self.vmin, self.vmax)
 
     def reset_img_contrast(self): #link to Reset button
         if self._current_img is None:
@@ -3167,31 +3446,38 @@ class TomoGUI(QWidget):
                 self._last_camera_rect = None
                 self._last_image_shape = None
                 self.canvas.update()
-            else:
-                self.refresh_current_image()
+            elif not VISPY_AVAILABLE and self._current_img is not None:
+                self._last_image_shape = None
+                self._pg_apply_levels(self.vmin, self.vmax)
+                self._pg_view_box.autoRange()
 
     def update_raw_slice(self):
         idx = self.slice_slider.value()
         self._remember_view()
         if 0 <= idx < self.raw_files_num:
             self.show_image(img_path=idx, flag="raw")
+        self.filename_label.setText("")
         
 
     def update_try_slice(self):
         idx = self.slice_slider.value()
         self._remember_view()
         if 0 <= idx < len(self.preview_files):
-            self.show_image(self.preview_files[idx], flag=None)
-            z = self.preview_files[idx].split('_')[-1].split('.')[0]
+            path = self.preview_files[idx]
+            self.show_image(path, flag=None)
+            self.filename_label.setText(os.path.basename(path))
+            z = os.path.basename(path).split('_')[-1].split('.')[0]
             self.slice_num.setText(z)
 
     def update_full_slice(self):
         idx = self.slice_slider.value()
         self._remember_view()
         if 0 <= idx < len(self.full_files):
-            self.show_image(self.full_files[idx], flag=None)
-            z = self.full_files[idx].split('_')[-1].split('.')[0]
+            path = self.full_files[idx]
+            self.show_image(path, flag=None)
+            z = os.path.basename(path).split('_')[-1].split('.')[0]
             self.slice_num.setText(z)
+        self.filename_label.setText("")
         
 
     def _safe_open_image(self, path, flag=None, retries=3): 
@@ -3225,12 +3511,25 @@ class TomoGUI(QWidget):
         self._current_img_path = img_path
         self._clear_roi()
 
-        # Update vispy image visual
-        self.image_visual.set_data(img)
-
-        # Set color limits
         vmin = self.vmin if self.vmin is not None else np.percentile(img, 1)
         vmax = self.vmax if self.vmax is not None else np.percentile(img, 99)
+
+        if not VISPY_AVAILABLE:
+            # --- PyQtGraph path ---
+            self._pg_image_item.setImage(img)
+            self._pg_image_item.setLevels([vmin, vmax])
+            try:
+                lut = (_mpl_cm.get_cmap(self.current_cmap)(np.linspace(0, 1, 256)) * 255).astype(np.uint8)
+                self._pg_image_item.setLookupTable(lut[:, :3])
+            except Exception:
+                pass
+            if self._last_image_shape != (h, w):
+                self._pg_view_box.autoRange()
+            self._last_image_shape = (h, w)
+            return
+
+        # --- VisPy path ---
+        self.image_visual.set_data(img)
         self.image_visual.clim = (vmin, vmax)
         self.image_visual.cmap = self.current_cmap
 
@@ -4593,11 +4892,13 @@ class TomoGUI(QWidget):
         else:
             self.theme_toggle_btn.setText("☀")
 
-        # Update vispy canvas background
-        if hasattr(self, 'canvas'):
+        # Update canvas background
+        if VISPY_AVAILABLE and hasattr(self, 'canvas'):
             bg_color = 'black' if theme_name == 'dark' else 'white'
             self.canvas.bgcolor = bg_color
             self.canvas.update()
+        elif not VISPY_AVAILABLE and hasattr(self, '_pg_layout'):
+            self._pg_layout.setBackground('k' if theme_name == 'dark' else 'w')
 
         # Refresh current image if available
         if self._current_img is not None:
