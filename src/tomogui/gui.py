@@ -249,6 +249,9 @@ class TomoGUI(QWidget):
         self.cor_path = None
         self._recon_params_data = None  # per-dataset params cache; None = needs reload
         self._sync_watcher = None       # SyncWatcher thread
+        self._sync_queue = []
+        self._sync_processing = False
+        self._sync_current_file = None
         self.batch_file_main_list = []
 
         # Batch selection state for shift-click
@@ -707,17 +710,6 @@ class TomoGUI(QWidget):
         self.coord_label.setFixedWidth(150)
         self.coord_label.setStyleSheet("font-size: 11pt;")
         toolbar_row.addWidget(self.coord_label)
-
-        # Slice number
-        slice_label = QLabel("z: ")
-        slice_label.setFixedWidth(30)
-        slice_label.setStyleSheet("font-size: 11pt;")
-        toolbar_row.addWidget(slice_label)
-        self.slice_num = QLabel("")
-        self.slice_num.setFixedWidth(70)
-        self.slice_num.setStyleSheet("font-size: 11pt;")
-        toolbar_row.addWidget(self.slice_num)
-
 
         # Colormap dropdown
         cmap_label = QLabel(" Cmap ")
@@ -2195,9 +2187,12 @@ class TomoGUI(QWidget):
             self.canvas.update()
         elif not VISPY_AVAILABLE and self._current_img is not None:
             try:
-                lut = (_mpl_cm.colormaps[self.current_cmap](np.linspace(0, 1, 256)) * 255).astype(np.uint8)
+                lut = (_mpl_cm.get_cmap(self.current_cmap)(np.linspace(0, 1, 256)) * 255).astype(np.uint8)
                 self._pg_image_item.setLookupTable(lut[:, :3])
-            except Exception:
+                self._pg_image_item.update()
+                self.canvas_widget.update()
+            except Exception as e:
+                self.log_output.append(f'cmap error: {type(e).__name__}: {e}')
                 pass
 
     def update_vmin_vmax(self): #link to min/max input
@@ -2956,12 +2951,18 @@ class TomoGUI(QWidget):
         if checkbox_widget:
             checkbox_widget.setStyleSheet(f"QWidget {{ border-left: 6px solid {color}; }}")
         status_item = QTableWidgetItem(status)
+        status_item.setTextAlignment(Qt.AlignCenter)
         self.batch_file_main_table.setItem(row, 3, status_item)
         self.batch_file_main_list[row]['status'] = status
-
+        
+    def _find_row_by_filepath(self, filepath):
+        for row in range(self.batch_file_main_table.rowCount()):
+            item = self.batch_file_main_table.item(row, 0)   # filename column
+            if item and item.toolTip() == filepath:
+                    return row
 
     def try_reconstruction(self):
-        proj_file = self.highlight_scan #the scan highlighted in main table full path
+        proj_file = self.highlight_scan
         if not proj_file:
             self.log_output.append(f"\u274c No file")
             return
@@ -3026,8 +3027,10 @@ class TomoGUI(QWidget):
             if code == 0:
                 self._update_row(row=self.highlight_row,color='orange',status='Done try') #change table content and self.batch_file_list
                 self.log_output.append(f'<span style="color:green;">\u2705 Done try recon {proj_file}</span>')
+                return True
             else:
                 self.log_output.append(f'<span style="color:red;">\u274c Try recon {proj_file} failed</span>')
+                return False
         finally:
             if self.use_conf_box.isChecked():
                 try:
@@ -3049,7 +3052,7 @@ class TomoGUI(QWidget):
             return
 
         # Step 1: run regular try reconstruction (blocks until done)
-        self.try_reconstruction()
+        ok = self.try_reconstruction()
 
         # Step 2: locate the output TIFFs
         proj_file = self.highlight_scan
@@ -3115,12 +3118,13 @@ class TomoGUI(QWidget):
                     if self.highlight_row is not None:
                         cor_widget = self.batch_file_main_table.cellWidget(self.highlight_row, 2)
                         if cor_widget:
-                            cor_widget.setText(ai_cor)
+                            cor_widget.setText(str(ai_cor))
                     self.log_output.append(f'<span style="color:green;">✅ AI COR: {ai_cor} — saved for {os.path.basename(proj_file)}</span>')
                     # Run full reconstruction with the AI-predicted COR
                     self.log_output.append('🚀 Starting full reconstruction with AI COR...')
                     QApplication.processEvents()
-                    self.full_reconstruction()
+                    return self.full_reconstruction()
+						
                 else:
                     self.log_output.append('<span style="color:orange;">⚠️ center_of_rotation.txt is empty</span>')
             else:
@@ -3145,6 +3149,10 @@ class TomoGUI(QWidget):
             self.sync_btn.setChecked(False)
             return
         known = set(glob.glob(os.path.join(data_folder, "*.h5")))
+        self._sync_queue = []
+        self._sync_processing = False
+        self._sync_current_file = None
+        
         self._sync_watcher = SyncWatcher(data_folder, known)
         self._sync_watcher.new_file_ready.connect(self._on_new_sync_file)
         self._sync_watcher.file_progress.connect(
@@ -3153,7 +3161,9 @@ class TomoGUI(QWidget):
             )
         )
         self._sync_watcher.start()
+        
         self.sync_btn.setText("⏹  Stop Sync")
+        self.batch_file_main_table.setEnabled(False)
         self.log_output.append(f'<span style="color:green;">🔄 Sync Acquisition started — watching {data_folder}</span>')
 
     def _stop_sync(self):
@@ -3161,8 +3171,14 @@ class TomoGUI(QWidget):
             self._sync_watcher.stop()
             self._sync_watcher.wait(3000)
             self._sync_watcher = None
+        
+        self._sync_queue = []
+        self._sync_processing = False
+        self._sync_current_file = None
+        
         self.sync_btn.setText("▶  Sync Acquisition")
         self.sync_btn.setChecked(False)
+        self.batch_file_main_table.setEnabled(True)
         self.log_output.append('🔄 Sync Acquisition stopped.')
 
     def _on_new_sync_file(self, filepath):
@@ -3170,33 +3186,39 @@ class TomoGUI(QWidget):
         self.log_output.append(f'🆕 New file detected: <b>{os.path.basename(filepath)}</b>')
         QApplication.processEvents()
 
-        # Add to table if not already present, then select it
-        self._add_file_to_table(filepath)
+        # queue, not process data
+        if filepath != self._sync_current_file and filepath not in self._sync_queue:
+            self._sync_queue.append(filepath)
+            self.log_output.append(f'📥 Added to sync queue: {os.path.basename(filepath)} '
+            f'(queue={len(self._sync_queue)})')
+        if not self._sync_processing:
+            self._process_next_sync_file()
 
         # Select the row so highlight_scan is set correctly
-        for row in range(self.batch_file_main_table.rowCount()):
-            item = self.batch_file_main_table.item(row, 0)
-            if item and item.toolTip() == filepath:
-                self.batch_file_main_table.selectRow(row)
-                self.on_table_row_clicked(row, 0)
-                break
+        #for row in range(self.batch_file_main_table.rowCount()):
+        #    item = self.batch_file_main_table.item(row, 0)
+        #    if item and item.toolTip() == filepath:
+        #        self.batch_file_main_table.selectRow(row)
+        #        self.on_table_row_clicked(row, 0)
+        #        break
 
-        QApplication.processEvents()
+        #QApplication.processEvents()
 
         # Run AI Reco (try + inference + full)
-        self.try_ai_reconstruction()
+        #self.try_ai_reconstruction()
 
         # Run tomolog upload
-        self._run_tomolog_for_file(filepath)
+        #self._run_tomolog_for_file(filepath)
+        #return 
 
     def _add_file_to_table(self, filepath):
         """Insert a single file row into the table if it is not already there."""
         # Check if already present
         for row in range(self.batch_file_main_table.rowCount()):
-            item = self.batch_file_main_table.item(row, 0)
-            if item and item.toolTip() == filepath:
+            item = self.batch_file_main_table.item(row, 1)
+            if item.text() == os.path.basename(filepath):
+                self.log_output.append('file exists in table, leave')
                 return
-
         data_folder = self.data_path.text().strip()
         filename = os.path.basename(filepath)
         proj_name = os.path.splitext(filename)[0]
@@ -3210,28 +3232,140 @@ class TomoGUI(QWidget):
 
         if has_full:
             row_color, status_text = "green", "Full"
+            fp = glob.glob(os.path.join(full_dir, "*.tiff"))
+            num_1 = int(Path(fp[0]).stem.split("_")[-1])
+            num_2 = int(Path(fp[-1]).stem.split("_")[-1])
+            status_item = QTableWidgetItem(f"{status_text} {num_1}-{num_2}")
         elif has_try:
             row_color, status_text = "orange", "Done try"
+            status_item = QTableWidgetItem(status_text)
         else:
             row_color, status_text = "red", "Ready"
+            status_item = QTableWidgetItem(status_text)
+        
+        # checkbox
+        checkbox = QCheckBox()
+        checkbox.clicked.connect(lambda checked, r=row: self._batch_checkbox_clicked(r, checked))
+        checkbox_widget = QWidget()
+        checkbox_layout = QHBoxLayout(checkbox_widget)
+        checkbox_layout.addWidget(checkbox)
+        checkbox_layout.setAlignment(Qt.AlignCenter)
+        checkbox_layout.setContentsMargins(0, 0, 0, 0)
+        checkbox_widget.setStyleSheet(f"QWidget {{ border-left: 6px solid {row_color}; }}")
+        self.batch_file_main_table.setCellWidget(row, 0, checkbox_widget)
+        
+        # filename
+        filename_item = QTableWidgetItem(filename)
+        filename_item.setToolTip(f"{filename}\n\nFull path:\n{filepath}")
+        self.batch_file_main_table.setItem(row, 1, filename_item)
+        
+        #cor default
+        cor_input = QLineEdit("")
+        cor_input.setPlaceholderText("COR value")
+        cor_input.setAlignment(Qt.AlignCenter)
+        cor_input.setFixedWidth(80)
+        self.batch_file_main_table.setCellWidget(row, 2, cor_input)
+        
+        #status
+        self.batch_file_main_table.setItem(row, 3, status_item)
+        
+        #file size
+        file_size = os.path.getsize(filepath)
+        size_str = self._format_file_size(file_size)
+        size_item = QTableWidgetItem(size_str)
+        size_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        size_item.setData(Qt.UserRole, file_size)
+        self.batch_file_main_table.setItem(row, 4, size_item)
+        
+        #placehold
+        actions_widget = QWidget()
+        actions_layout = QHBoxLayout(actions_widget)
+        actions_layout.setContentsMargins(2, 2, 2, 2)
+        actions_layout.setSpacing(2)
+        self.batch_file_main_table.setCellWidget(row, 5, actions_widget)
+        
+        #view data
+        view_data_btn = QPushButton("View Data")
+        view_data_btn.setFixedWidth(80)
+        view_data_btn.clicked.connect(lambda checked, fp=filepath: self._batch_view_data(fp))
+        self.batch_file_main_table.setCellWidget(row, 6, view_data_btn)
+        
+        file_info = {
+        'path': filepath,
+        'filename': filename,
+        'recon_status': row_color,
+        'checkbox': checkbox,
+        'checkbox_widget': checkbox_widget,
+        'cor_input': cor_input,
+        'status': status_item,
+        'view_btn': view_data_btn,
+        }
 
+        self.batch_file_main_list.insert(row, file_info)
+        self.log_output.append(f'this is file info {file_info}')
+        '''
         from PyQt5.QtWidgets import QTableWidgetItem as _TWI
         name_item = _TWI(filename)
         name_item.setToolTip(filepath)
         name_item.setForeground(QColor(row_color))
-        self.batch_file_main_table.setItem(row, 0, name_item)
+        self.batch_file_main_table.setItem(row, 1, name_item)
 
         status_item = _TWI(status_text)
         status_item.setForeground(QColor(row_color))
-        self.batch_file_main_table.setItem(row, 1, status_item)
+        self.batch_file_main_table.setItem(row, 3, status_item)
 
         cor_val = self.cor_data.get(filepath, "")
         cor_widget = QLineEdit(str(cor_val))
         cor_widget.setAlignment(Qt.AlignCenter)
         self.batch_file_main_table.setCellWidget(row, 2, cor_widget)
+        
+        file_size = os.path.getsize(f)
+        size_str = self._format_file_size(file_size)
+        size_item = QTableWidgetItem(size_str)
+        size_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        # Store numeric value for proper sorting
+        size_item.setData(Qt.UserRole, file_size)
+        self.batch_file_main_table.setItem(row, 4, size_item)
+        '''
+        #self.batch_file_main_list.insert(0, {'file': filepath, 'cor_input': cor_widget})
+        
+    def _process_next_sync_file(self):
+        if not self.sync_btn.isChecked():
+            return
+        if self._sync_processing:
+            return
+        if not self._sync_queue:
+            self._sync_current_file = None
+            return
+        filepath = self._sync_queue.pop(0)
+        self._sync_current_file = filepath
+        self._sync_processing = True
+        self._add_file_to_table(filepath) #always the first one 
+        self.log_output.append(f'▶ Start sync processing: <b>{os.path.basename(filepath)}</b>')
+        # Select the row so highlight_scan is set correctly
+        for row in reversed(range(self.batch_file_main_table.rowCount())):
+            item = self.batch_file_main_table.item(row, 1)
+            if item.text() == os.path.basename(filepath):
+                self.batch_file_main_table.selectRow(row)
+                self.on_table_row_clicked(row, 0)
+                break
+                
+        QApplication.processEvents()
+        ok = self.try_ai_reconstruction()
+        
+        if ok:
+            self._run_tomolog_for_file(filepath)
+        else:
+            self.log_output.append(
+                f'<span style="color:red;">❌ Sync reconstruction failed, skipping tomolog: {os.path.basename(filepath)}</span>'
+             )
 
-        self.batch_file_main_list.insert(0, {'file': filepath, 'cor_input': cor_widget})
+        self._sync_processing = False
+        self._sync_current_file = None
 
+        #continue with next file
+        self._process_next_sync_file()
+        
     def _run_tomolog_for_file(self, filepath):
         """Run tomolog upload for a specific file using current GUI settings."""
         beamline = self.beamline_box.currentText()
@@ -3279,7 +3413,7 @@ class TomoGUI(QWidget):
             self.full_btn.setEnabled(True)
 
     def full_reconstruction(self):
-        self.full_btn.setEnabled(False)
+        self._update_full_btn_state()
         proj_file = self.highlight_scan
         # Mark this file as running locally and grey out button only for it
         self._running_full_file = proj_file
@@ -3292,7 +3426,7 @@ class TomoGUI(QWidget):
             gpu = str(self.cuda_full_box.value())
             if cor_method == "manual":
                 try:
-                    cor_value = float(self.batch_file_main_list[highlight_row]['cor_input'].text().strip())
+                    cor_value = float(self.batch_file_main_list[self.highlight_row]['cor_input'].text().strip())
                 except ValueError:
                     self.log_output.append('<span style="color:red;">\u274c[ERROR] Invalid Full COR value</span>')
                     return
@@ -3338,11 +3472,13 @@ class TomoGUI(QWidget):
                     full_files = glob.glob(os.path.join(fullpath, "*.tiff"))
                     num_1 = int(Path(full_files[0]).stem.split("_")[-1])
                     num_2 = int(Path(full_files[-1]).stem.split("_")[-1])
-                    self._update_row(row=highlight_row, color='green', status=f'Full {num_1}-{num_2}')
+                    self._update_row(row=self.highlight_row, color='green', status=f'Full {num_1}-{num_2}')
                     self.log_output.append(f'<span style="color:green;">\u2705 Done full recon {proj_file}</span>')
                     del fullpath, full_files, num_1, num_2, pn
+                    return True
                 else:
                     self.log_output.append(f'<span style="color:red;">\u274c Full recon {proj_file} failed</span>')
+                    return False
             finally:
                 if self.use_conf_box.isChecked():
                     try:
@@ -3359,7 +3495,9 @@ class TomoGUI(QWidget):
                         self.log_output.append(f"\U0001f9f9 Removed {temp_full}")
                 except Exception as e:
                     self.log_output.append(f'<span style="color:red;">\u26a0\ufe0f Could not remove {temp_full}: {e}</span>')
-        self.full_btn.setEnabled(True)
+            self._running_full_file = None
+            self._update_full_btn_state()
+		    
     #=============Batch OPERATIONS==================
     def _batch_select_all(self):
         """Select all files in the batch list"""
@@ -3793,8 +3931,6 @@ class TomoGUI(QWidget):
             path = self.preview_files[idx]
             self.show_image(path, flag=None)
             self.filename_label.setText(os.path.basename(path))
-            z = os.path.basename(path).split('_')[-1].split('.')[0]
-            self.slice_num.setText(z)
 
     def update_full_slice(self):
         idx = self.slice_slider.value()
@@ -3802,9 +3938,7 @@ class TomoGUI(QWidget):
         if 0 <= idx < len(self.full_files):
             path = self.full_files[idx]
             self.show_image(path, flag=None)
-            z = os.path.basename(path).split('_')[-1].split('.')[0]
-            self.slice_num.setText(z)
-        self.filename_label.setText("")
+            self.filename_label.setText(os.path.basename(path))
         
 
     def _safe_open_image(self, path, flag=None, retries=3): 
@@ -3840,13 +3974,12 @@ class TomoGUI(QWidget):
 
         vmin = self.vmin if self.vmin is not None else np.percentile(img, 1)
         vmax = self.vmax if self.vmax is not None else np.percentile(img, 99)
-
         if not VISPY_AVAILABLE:
             # --- PyQtGraph path ---
-            self._pg_image_item.setImage(img)
+            self._pg_image_item.setImage(img, autoLevels=False)
             self._pg_image_item.setLevels([vmin, vmax])
             try:
-                lut = (_mpl_cm.colormaps[self.current_cmap](np.linspace(0, 1, 256)) * 255).astype(np.uint8)
+                lut = (_mpl_cm.get_cmap(self.current_cmap)(np.linspace(0, 1, 256)) * 255).astype(np.uint8)
                 self._pg_image_item.setLookupTable(lut[:, :3])
             except Exception:
                 pass
@@ -4738,14 +4871,6 @@ class TomoGUI(QWidget):
         except Exception as e:
             # If anything goes wrong, just return basic status
             return "Done full", "green"
-
-    def _find_row_by_filename(self, filename, filename_col=1):
-        table = self.batch_file_main_table
-        for row in range(table.rowCount()):
-            it = table.item(row, filename_col)
-            if it and it.text() == filename:
-                return row
-        return None
 
     def _set_status_by_filename(self, filename, text, status_col=3, filename_col=1, color=None):
         table = self.batch_file_main_table
