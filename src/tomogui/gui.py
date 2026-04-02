@@ -2187,7 +2187,7 @@ class TomoGUI(QWidget):
             self.canvas.update()
         elif not VISPY_AVAILABLE and self._current_img is not None:
             try:
-                lut = (_mpl_cm.get_cmap(self.current_cmap)(np.linspace(0, 1, 256)) * 255).astype(np.uint8)
+                lut = (_mpl_cm.colormaps[self.current_cmap](np.linspace(0, 1, 256)) * 255).astype(np.uint8)
                 self._pg_image_item.setLookupTable(lut[:, :3])
                 self._pg_image_item.update()
                 self.canvas_widget.update()
@@ -3972,14 +3972,24 @@ class TomoGUI(QWidget):
         self._current_img_path = img_path
         self._clear_roi()
 
-        vmin = self.vmin if self.vmin is not None else np.percentile(img, 1)
-        vmax = self.vmax if self.vmax is not None else np.percentile(img, 99)
+        if self.vmin is not None:
+            vmin = self.vmin
+        else:
+            vmin = float(round(np.percentile(img, 1), 5))
+            self.vmin = vmin
+            self.min_input.setText(str(vmin))
+        if self.vmax is not None:
+            vmax = self.vmax
+        else:
+            vmax = float(round(np.percentile(img, 99), 5))
+            self.vmax = vmax
+            self.max_input.setText(str(vmax))
         if not VISPY_AVAILABLE:
             # --- PyQtGraph path ---
             self._pg_image_item.setImage(img, autoLevels=False)
             self._pg_image_item.setLevels([vmin, vmax])
             try:
-                lut = (_mpl_cm.get_cmap(self.current_cmap)(np.linspace(0, 1, 256)) * 255).astype(np.uint8)
+                lut = (_mpl_cm.colormaps[self.current_cmap](np.linspace(0, 1, 256)) * 255).astype(np.uint8)
                 self._pg_image_item.setLookupTable(lut[:, :3])
             except Exception:
                 pass
@@ -4023,9 +4033,13 @@ class TomoGUI(QWidget):
             pass
 
     def _reset_view_state(self):
-        """Forget any prior zoom/pan so the next image shows full frame."""
+        """Forget any prior zoom/pan and contrast so the next image shows fresh."""
         self._last_camera_rect = None
         self._last_image_shape = None
+        self.vmin = None
+        self.vmax = None
+        self.min_input.clear()
+        self.max_input.clear()
 
     # ===== TOMOLOG METHODS =====
     def get_note_value(self):
