@@ -585,6 +585,11 @@ class TomoGUI(QWidget):
         batch_full_btn.clicked.connect(self._batch_run_full_selected) #TODO: needs to modify to work with table
         #batch_full_btn.setFixedWidth(100)
         batch_ops.addWidget(batch_full_btn)
+        delete_sel_btn = QPushButton("Delete Selected")
+        delete_sel_btn.setStyleSheet("QPushButton { font-size: 10.5pt; color: #c62828; }")
+        delete_sel_btn.setToolTip("Delete the selected HDF5 files from disk (with confirmation)")
+        delete_sel_btn.clicked.connect(self._delete_selected_files)
+        batch_ops.addWidget(delete_sel_btn)
         main_tab.addLayout(batch_ops)
         #Row 6: log
         log_box = QVBoxLayout()
@@ -1942,7 +1947,7 @@ class TomoGUI(QWidget):
             elif kind == "dspin":
                 args += [flag, str(w.value())]
 
-        return args        
+        return args
 
         # ===== advanced config tab====
     def _build_advanced_config_tab(self):
@@ -4708,6 +4713,40 @@ class TomoGUI(QWidget):
 
         if len(selected_files) > 1:
             self.log_output.append(f'<span style="color:blue;">ℹ️  {len(selected_files)} files selected, opened first: {os.path.basename(first_file)}</span>')
+
+    def _delete_selected_files(self):
+        """Delete selected HDF5 files from disk after user confirmation."""
+        selected = []
+        for file_info in self.batch_file_main_list:
+            if file_info['checkbox'].isChecked():
+                selected.append(file_info['file'])
+
+        if not selected:
+            self.log_output.append('<span style="color:orange;">⚠️ No files selected for deletion</span>')
+            return
+
+        file_list = "\n".join(os.path.basename(f) for f in selected)
+        reply = QMessageBox.warning(
+            self, "Confirm Deletion",
+            f"Are you sure you want to permanently delete {len(selected)} file(s)?\n\n{file_list}",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            self.log_output.append('Deletion cancelled.')
+            return
+
+        deleted = 0
+        for f in selected:
+            try:
+                os.remove(f)
+                deleted += 1
+                self.log_output.append(f'🗑️ Deleted {os.path.basename(f)}')
+            except OSError as e:
+                self.log_output.append(f'<span style="color:red;">❌ Cannot delete {os.path.basename(f)}: {e}</span>')
+
+        if deleted:
+            self.log_output.append(f'<span style="color:green;">✅ Deleted {deleted}/{len(selected)} files. Refreshing table...</span>')
+            self.refresh_main_table()
 
     def _select_done_try(self):
         found = False
