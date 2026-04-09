@@ -2669,13 +2669,6 @@ class TomoGUI(QWidget):
         except Exception:
             pass    
 
-    def refresh_h5_files(self):
-        self.proj_file_box.clear()
-        folder = self.data_path.text()
-        if folder and os.path.isdir(folder):
-            for f in sorted(glob.glob(os.path.join(folder, "*.h5")),key=os.path.getmtime, reverse=True): #newest → oldest
-                self.proj_file_box.addItem(os.path.basename(f), f)
-
     def on_table_row_clicked(self, row, column):
         # Save current GUI params for the previously selected dataset before switching
         if self.highlight_scan:
@@ -4100,18 +4093,21 @@ class TomoGUI(QWidget):
         data_folder = self.data_path.text().strip()
         vmin = self.min_input.text().strip()
         vmax = self.max_input.text().strip()
-        
+
         if not data_folder:
             self.log_output.append(f'<span style="color:red;">\u274c[ERROR] Data folder not set</span>')
             return
-        
+
         flist = []
         if not scan_number:
-            fn = self.proj_file_box.currentText()
-            filename = os.path.join(data_folder, f"{fn}")
-            flist.append(filename)
-            if not filename:
-                self.log_output.append(f'<span style="color:red;">\u274c[ERROR] Filename not exist</span>')
+            # Use selected (checked) files from the table; fall back to highlighted row
+            for file_info in self.batch_file_main_list:
+                if file_info['checkbox'].isChecked():
+                    flist.append(file_info['file'])
+            if not flist and self.highlight_scan:
+                flist.append(self.highlight_scan)
+            if not flist:
+                self.log_output.append('<span style="color:red;">\u274c[ERROR] No files selected in table</span>')
                 return
         else:
             numbers = set()
