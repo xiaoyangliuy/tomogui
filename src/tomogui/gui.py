@@ -585,6 +585,11 @@ class TomoGUI(QWidget):
         batch_full_btn.clicked.connect(self._batch_run_full_selected) #TODO: needs to modify to work with table
         #batch_full_btn.setFixedWidth(100)
         batch_ops.addWidget(batch_full_btn)
+        delete_sel_btn = QPushButton("Delete Selected")
+        delete_sel_btn.setStyleSheet("QPushButton { font-size: 10.5pt; color: #c62828; }")
+        delete_sel_btn.setToolTip("Delete the selected HDF5 files from disk (with confirmation)")
+        delete_sel_btn.clicked.connect(self._delete_selected_files)
+        batch_ops.addWidget(delete_sel_btn)
         main_tab.addLayout(batch_ops)
         #Row 6: log
         log_box = QVBoxLayout()
@@ -1942,7 +1947,7 @@ class TomoGUI(QWidget):
             elif kind == "dspin":
                 args += [flag, str(w.value())]
 
-        return args        
+        return args
 
         # ===== advanced config tab====
     def _build_advanced_config_tab(self):
@@ -2187,7 +2192,7 @@ class TomoGUI(QWidget):
             self.canvas.update()
         elif not VISPY_AVAILABLE and self._current_img is not None:
             try:
-                lut = (_mpl_cm.get_cmap(self.current_cmap)(np.linspace(0, 1, 256)) * 255).astype(np.uint8)
+                lut = (_mpl_cm.colormaps[self.current_cmap](np.linspace(0, 1, 256)) * 255).astype(np.uint8)
                 self._pg_image_item.setLookupTable(lut[:, :3])
                 self._pg_image_item.update()
                 self.canvas_widget.update()
@@ -2663,13 +2668,6 @@ class TomoGUI(QWidget):
             self.batch_file_main_list[row]["cor_input"] = w
         except Exception:
             pass    
-
-    def refresh_h5_files(self):
-        self.proj_file_box.clear()
-        folder = self.data_path.text()
-        if folder and os.path.isdir(folder):
-            for f in sorted(glob.glob(os.path.join(folder, "*.h5")),key=os.path.getmtime, reverse=True): #newest → oldest
-                self.proj_file_box.addItem(os.path.basename(f), f)
 
     def on_table_row_clicked(self, row, column):
         # Save current GUI params for the previously selected dataset before switching
@@ -3972,14 +3970,24 @@ class TomoGUI(QWidget):
         self._current_img_path = img_path
         self._clear_roi()
 
-        vmin = self.vmin if self.vmin is not None else np.percentile(img, 1)
-        vmax = self.vmax if self.vmax is not None else np.percentile(img, 99)
+        if self.vmin is not None:
+            vmin = self.vmin
+        else:
+            vmin = float(round(np.percentile(img, 1), 5))
+            self.vmin = vmin
+            self.min_input.setText(str(vmin))
+        if self.vmax is not None:
+            vmax = self.vmax
+        else:
+            vmax = float(round(np.percentile(img, 99), 5))
+            self.vmax = vmax
+            self.max_input.setText(str(vmax))
         if not VISPY_AVAILABLE:
             # --- PyQtGraph path ---
             self._pg_image_item.setImage(img, autoLevels=False)
             self._pg_image_item.setLevels([vmin, vmax])
             try:
-                lut = (_mpl_cm.get_cmap(self.current_cmap)(np.linspace(0, 1, 256)) * 255).astype(np.uint8)
+                lut = (_mpl_cm.colormaps[self.current_cmap](np.linspace(0, 1, 256)) * 255).astype(np.uint8)
                 self._pg_image_item.setLookupTable(lut[:, :3])
             except Exception:
                 pass
@@ -4023,9 +4031,13 @@ class TomoGUI(QWidget):
             pass
 
     def _reset_view_state(self):
-        """Forget any prior zoom/pan so the next image shows full frame."""
+        """Forget any prior zoom/pan and contrast so the next image shows fresh."""
         self._last_camera_rect = None
         self._last_image_shape = None
+        self.vmin = None
+        self.vmax = None
+        self.min_input.clear()
+        self.max_input.clear()
 
     # ===== TOMOLOG METHODS =====
     def get_note_value(self):
@@ -4081,18 +4093,21 @@ class TomoGUI(QWidget):
         data_folder = self.data_path.text().strip()
         vmin = self.min_input.text().strip()
         vmax = self.max_input.text().strip()
-        
+
         if not data_folder:
             self.log_output.append(f'<span style="color:red;">\u274c[ERROR] Data folder not set</span>')
             return
-        
+
         flist = []
         if not scan_number:
-            fn = self.proj_file_box.currentText()
-            filename = os.path.join(data_folder, f"{fn}")
-            flist.append(filename)
-            if not filename:
-                self.log_output.append(f'<span style="color:red;">\u274c[ERROR] Filename not exist</span>')
+            # Use selected (checked) files from the table; fall back to highlighted row
+            for file_info in self.batch_file_main_list:
+                if file_info['checkbox'].isChecked():
+                    flist.append(file_info['file'])
+            if not flist and self.highlight_scan:
+                flist.append(self.highlight_scan)
+            if not flist:
+                self.log_output.append('<span style="color:red;">\u274c[ERROR] No files selected in table</span>')
                 return
         else:
             numbers = set()
@@ -4694,6 +4709,40 @@ class TomoGUI(QWidget):
 
         if len(selected_files) > 1:
             self.log_output.append(f'<span style="color:blue;">ℹ️  {len(selected_files)} files selected, opened first: {os.path.basename(first_file)}</span>')
+
+    def _delete_selected_files(self):
+        """Delete selected HDF5 files from disk after user confirmation."""
+        selected = []
+        for file_info in self.batch_file_main_list:
+            if file_info['checkbox'].isChecked():
+                selected.append(file_info['file'])
+
+        if not selected:
+            self.log_output.append('<span style="color:orange;">⚠️ No files selected for deletion</span>')
+            return
+
+        file_list = "\n".join(os.path.basename(f) for f in selected)
+        reply = QMessageBox.warning(
+            self, "Confirm Deletion",
+            f"Are you sure you want to permanently delete {len(selected)} file(s)?\n\n{file_list}",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            self.log_output.append('Deletion cancelled.')
+            return
+
+        deleted = 0
+        for f in selected:
+            try:
+                os.remove(f)
+                deleted += 1
+                self.log_output.append(f'🗑️ Deleted {os.path.basename(f)}')
+            except OSError as e:
+                self.log_output.append(f'<span style="color:red;">❌ Cannot delete {os.path.basename(f)}: {e}</span>')
+
+        if deleted:
+            self.log_output.append(f'<span style="color:green;">✅ Deleted {deleted}/{len(selected)} files. Refreshing table...</span>')
+            self.refresh_main_table()
 
     def _select_done_try(self):
         found = False
