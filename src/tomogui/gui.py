@@ -359,7 +359,11 @@ class TomoGUI(QWidget):
         ai_model_label = QLabel("AI Model:")
         ai_model_label.setStyleSheet("QLabel { font-size: 10.5pt; }")
         ai_ops.addWidget(ai_model_label)
-        self.ai_model_path = QLineEdit()
+        _default_ai_model = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "AImodels", "datav2_518_full_finetune", "epoch_10.pt",
+        )
+        self.ai_model_path = QLineEdit(_default_ai_model)
         self.ai_model_path.setPlaceholderText("Path to model weights (.pth/.pt)")
         self.ai_model_path.setStyleSheet("QLineEdit { font-size: 10pt; }")
         ai_ops.addWidget(self.ai_model_path, 1)
