@@ -96,22 +96,34 @@ class SyncWatcher(QThread):
         except Exception:
             return 0, 0
 
+    def _sleep_interruptible(self, seconds):
+        """Sleep in 100 ms chunks so stop() is responsive."""
+        for _ in range(int(seconds * 10)):
+            if self._stop:
+                return
+            self.msleep(100)
+
     def run(self):
         pending = set()   # files seen but not yet complete
         while not self._stop:
-            current = set(glob.glob(os.path.join(self.folder, "*.h5")))
-            new_files = (current - self.known_files) | pending
-            pending.clear()
-            for f in new_files:
-                n_done, n_total = self._check_complete(f)
-                if n_total > 0 and n_done >= n_total:
-                    self.known_files.add(f)
-                    self.new_file_ready.emit(f)
-                else:
-                    pending.add(f)
-                    if n_total > 0:
-                        self.file_progress.emit(f, n_done, n_total)
-            self.msleep(int(self.check_interval * 1000))
+            try:
+                current = set(glob.glob(os.path.join(self.folder, "*.h5")))
+                new_files = (current - self.known_files) | pending
+                pending.clear()
+                for f in new_files:
+                    if self._stop:
+                        return
+                    n_done, n_total = self._check_complete(f)
+                    if n_total > 0 and n_done >= n_total:
+                        self.known_files.add(f)
+                        self.new_file_ready.emit(f)
+                    else:
+                        pending.add(f)
+                        if n_total > 0:
+                            self.file_progress.emit(f, n_done, n_total)
+            except Exception:
+                pass
+            self._sleep_interruptible(self.check_interval)
 
 
 class MachineSettingsDialog(QDialog):
@@ -3168,10 +3180,27 @@ class TomoGUI(QWidget):
         self.batch_file_main_table.setEnabled(False)
         self.log_output.append(f'<span style="color:green;">🔄 Sync Acquisition started — watching {data_folder}</span>')
 
+    def closeEvent(self, event):
+        """Ensure background threads stop cleanly before the window closes."""
+        try:
+            if self._sync_watcher:
+                self._sync_watcher.stop()
+                if not self._sync_watcher.wait(5000):
+                    self._sync_watcher.terminate()
+                    self._sync_watcher.wait(1000)
+                self._sync_watcher = None
+        except Exception:
+            pass
+        super().closeEvent(event)
+
     def _stop_sync(self):
         if self._sync_watcher:
             self._sync_watcher.stop()
-            self._sync_watcher.wait(3000)
+            # give the thread up to 15 s to exit its poll cycle
+            if not self._sync_watcher.wait(15000):
+                self.log_output.append('<span style="color:orange;">⚠️ Sync thread did not exit, terminating</span>')
+                self._sync_watcher.terminate()
+                self._sync_watcher.wait(2000)
             self._sync_watcher = None
         
         self._sync_queue = []
