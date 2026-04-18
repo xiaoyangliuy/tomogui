@@ -2975,22 +2975,41 @@ class TomoGUI(QWidget):
         self.batch_file_main_list[row]['status'] = status
         
     def _find_row_by_filepath(self, filepath):
+        """Row lookup by full path. Scans `batch_file_main_list` (authoritative)
+        and falls back to table text/tooltip matching if needed."""
+        # 1) Authoritative: the Python-side list
+        for fi in self.batch_file_main_list:
+            if fi.get('path') == filepath:
+                return fi.get('row')
+        # 2) Fallback via table contents (filename is in column 1, not 0)
+        base = os.path.basename(filepath)
         for row in range(self.batch_file_main_table.rowCount()):
-            item = self.batch_file_main_table.item(row, 0)   # filename column
-            if item and item.toolTip() == filepath:
-                    return row
-
-    def _find_row_by_filename(self, filename, filename_col=None):
-        """Find a row whose filename column matches `filename`. Accepts either a
-        full path (matches the tooltip) or a bare basename (matches the visible text)."""
-        base = os.path.basename(filename)
-        for row in range(self.batch_file_main_table.rowCount()):
-            item = self.batch_file_main_table.item(row, 0)
+            item = self.batch_file_main_table.item(row, 1)
             if item is None:
                 continue
-            if item.toolTip() == filename:
-                return row
             if item.text() == base:
+                return row
+            if filepath and filepath in (item.toolTip() or ""):
+                return row
+        return None
+
+    def _find_row_by_filename(self, filename, filename_col=None):
+        """Row lookup by full path or by bare basename."""
+        base = os.path.basename(filename)
+        # 1) Authoritative Python list first
+        for fi in self.batch_file_main_list:
+            if fi.get('path') == filename:
+                return fi.get('row')
+            if fi.get('filename') == base:
+                return fi.get('row')
+        # 2) Fallback via the filename column (1, not 0 — 0 is the checkbox)
+        for row in range(self.batch_file_main_table.rowCount()):
+            item = self.batch_file_main_table.item(row, 1)
+            if item is None:
+                continue
+            if item.text() == base:
+                return row
+            if filename and filename in (item.toolTip() or ""):
                 return row
         return None
 
