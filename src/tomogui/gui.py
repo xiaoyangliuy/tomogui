@@ -601,6 +601,11 @@ class TomoGUI(QWidget):
         batch_full_btn.clicked.connect(self._batch_run_full_selected) #TODO: needs to modify to work with table
         #batch_full_btn.setFixedWidth(100)
         batch_ops.addWidget(batch_full_btn)
+        batch_ai_btn = QPushButton("Batch AI Reco")
+        batch_ai_btn.setStyleSheet("QPushButton { font-size: 10.5pt; font-weight:bold; color: #1a8cff; }")
+        batch_ai_btn.setToolTip("Run AI Reco (try + inference + full) on every selected file, one at a time")
+        batch_ai_btn.clicked.connect(self._batch_run_ai_selected)
+        batch_ops.addWidget(batch_ai_btn)
         delete_sel_btn = QPushButton("Delete Selected")
         delete_sel_btn.setStyleSheet("QPushButton { font-size: 10.5pt; color: #c62828; }")
         delete_sel_btn.setToolTip("Delete the selected HDF5 files from disk (with confirmation)")
@@ -2970,10 +2975,43 @@ class TomoGUI(QWidget):
         self.batch_file_main_list[row]['status'] = status
         
     def _find_row_by_filepath(self, filepath):
+        """Row lookup by full path. Scans `batch_file_main_list` (authoritative)
+        and falls back to table text/tooltip matching if needed."""
+        # 1) Authoritative: the Python-side list
+        for fi in self.batch_file_main_list:
+            if fi.get('path') == filepath:
+                return fi.get('row')
+        # 2) Fallback via table contents (filename is in column 1, not 0)
+        base = os.path.basename(filepath)
         for row in range(self.batch_file_main_table.rowCount()):
-            item = self.batch_file_main_table.item(row, 0)   # filename column
-            if item and item.toolTip() == filepath:
-                    return row
+            item = self.batch_file_main_table.item(row, 1)
+            if item is None:
+                continue
+            if item.text() == base:
+                return row
+            if filepath and filepath in (item.toolTip() or ""):
+                return row
+        return None
+
+    def _find_row_by_filename(self, filename, filename_col=None):
+        """Row lookup by full path or by bare basename."""
+        base = os.path.basename(filename)
+        # 1) Authoritative Python list first
+        for fi in self.batch_file_main_list:
+            if fi.get('path') == filename:
+                return fi.get('row')
+            if fi.get('filename') == base:
+                return fi.get('row')
+        # 2) Fallback via the filename column (1, not 0 — 0 is the checkbox)
+        for row in range(self.batch_file_main_table.rowCount()):
+            item = self.batch_file_main_table.item(row, 1)
+            if item is None:
+                continue
+            if item.text() == base:
+                return row
+            if filename and filename in (item.toolTip() or ""):
+                return row
+        return None
 
     def try_reconstruction(self):
         proj_file = self.highlight_scan
@@ -4293,53 +4331,39 @@ class TomoGUI(QWidget):
         from PyQt5.QtCore import Qt
 
         if modifiers == Qt.ShiftModifier and self.batch_last_clicked_row is not None:
-            # Shift-click: select range
+            # Shift-click: check every row between the previously-clicked row
+            # and this one. COR propagation is optional — Batch AI Reco does
+            # not need per-row CORs, so we no longer refuse the range when
+            # the first row is empty.
             start_row = min(self.batch_last_clicked_row, row)
             end_row = max(self.batch_last_clicked_row, row)
 
-            # Get the first selected row's COR value for propagation
             first_cor = None
-            first_filename = None
-            for file_info in self.batch_file_list:
+            for file_info in self.batch_file_main_list:
                 if file_info['row'] == start_row:
                     first_cor = file_info['cor_input'].text().strip()
-                    first_filename = file_info['filename']
                     break
 
-            # Validate that first row has COR value
-            if not first_cor:
-                QMessageBox.warning(
-                    self, "Missing COR",
-                    f"The first selected file ({first_filename}) must have a COR value.\n"
-                    f"Please enter a COR value for this file before shift-selecting."
-                )
-                # Uncheck the current checkbox since shift-select failed
-                for file_info in self.batch_file_list:
-                    if file_info['row'] == row:
-                        file_info['checkbox'].setChecked(False)
-                        break
-                return
-
-            # Select all rows in range and propagate COR if not set
+            propagated = 0
             for r in range(start_row, end_row + 1):
-                for file_info in self.batch_file_list:
+                for file_info in self.batch_file_main_list:
                     if file_info['row'] == r:
-                        # Check the checkbox
                         file_info['checkbox'].setChecked(True)
-
-                        # Propagate COR from first if this row doesn't have one
-                        current_cor = file_info['cor_input'].text().strip()
-                        if not current_cor and first_cor:
+                        if first_cor and not file_info['cor_input'].text().strip():
                             file_info['cor_input'].setText(first_cor)
+                            propagated += 1
                         break
 
-            self.log_output.append(f'<span style="color:green;">✅ Selected rows {start_row} to {end_row} ({end_row - start_row + 1} files)</span>')
-            if first_cor:
-                propagated_count = sum(1 for r in range(start_row, end_row + 1)
-                                     for f in self.batch_file_list
-                                     if f['row'] == r and f['cor_input'].text().strip() == first_cor)
-                if propagated_count > 1:  # More than just the first one
-                    self.log_output.append(f'<span style="color:blue;">📍 Propagated COR value {first_cor} to {propagated_count - 1} file(s)</span>')
+            n = end_row - start_row + 1
+            self.log_output.append(
+                f'<span style="color:green;">✅ Selected rows {start_row}–{end_row} '
+                f'({n} files)</span>'
+            )
+            if propagated:
+                self.log_output.append(
+                    f'<span style="color:blue;">📍 Propagated COR {first_cor} to '
+                    f'{propagated} row(s) that had none</span>'
+                )
 
         # Update last clicked row
         self.batch_last_clicked_row = row
@@ -4900,6 +4924,85 @@ class TomoGUI(QWidget):
 
         self._run_batch_with_queue(selected_files, recon_type='try', num_gpus=num_gpus, machine=machine)
 
+    def _batch_run_ai_selected(self):
+        """Run AI Reco (Try → inference → Full) sequentially on all selected files.
+        Unlike Try/Full batch, this one does NOT parallelise on GPUs — each file
+        goes through the full AI pipeline one after the other so the torch
+        inference step doesn't fight the GPU with concurrent tomocupy jobs."""
+        selected_files = [f for f in self.batch_file_main_list if f['checkbox'].isChecked()]
+        if not selected_files:
+            QMessageBox.warning(self, "Warning", "No files selected.")
+            return
+
+        model_path = self.ai_model_path.text().strip()
+        if not model_path or not os.path.exists(model_path):
+            self.log_output.append('<span style="color:red;">❌ Invalid AI model path</span>')
+            return
+
+        # AI Reco uses the top-bar Try COR as the starting guess for the
+        # search; per-row CORs are written by the inference step, so we only
+        # need to confirm the top-bar has a valid starting number.
+        try_cor_txt = self.cor_input.text().strip()
+        if self.cor_method_box.currentText() != "auto":
+            try:
+                float(try_cor_txt)
+            except (ValueError, TypeError):
+                self.log_output.append(
+                    '<span style="color:red;">❌ Top-bar Try COR is empty or invalid — '
+                    'AI Reco needs a starting guess. Set it before running batch.</span>'
+                )
+                return
+
+        reply = QMessageBox.question(
+            self, 'Confirm Batch AI Reco',
+            f'Run AI Reco (try + inference + full) sequentially on '
+            f'{len(selected_files)} selected files?\n'
+            f'Starting COR guess: {try_cor_txt or "auto"}  (from top-bar, applied to every file).\n'
+            'Per-row CORs are not required — inference fills them in.',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        self.log_output.append(
+            f'<span style="color:#1a8cff;font-weight:bold;">🤖 Starting Batch AI Reco on '
+            f'{len(selected_files)} files...</span>'
+        )
+
+        completed = 0
+        failed = 0
+        for idx, file_info in enumerate(selected_files, 1):
+            proj_file = file_info.get('path') or file_info.get('file') or file_info.get('filename')
+            self.log_output.append(
+                f'<span style="color:#1a8cff;">── [{idx}/{len(selected_files)}] '
+                f'{os.path.basename(proj_file)}</span>'
+            )
+            QApplication.processEvents()
+
+            # Select this row so try_ai_reconstruction() uses it
+            row = self._find_row_by_filepath(proj_file)
+            if row is None:
+                self.log_output.append(f'<span style="color:red;">❌ Row for {proj_file} not found</span>')
+                failed += 1
+                continue
+            self.batch_file_main_table.selectRow(row)
+            self.on_table_row_clicked(row, 0)
+            QApplication.processEvents()
+
+            try:
+                self.try_ai_reconstruction()   # runs try + inference + full (already wired)
+                completed += 1
+            except Exception as e:
+                self.log_output.append(
+                    f'<span style="color:red;">❌ AI Reco failed on {os.path.basename(proj_file)}: {e}</span>'
+                )
+                failed += 1
+
+        self.log_output.append(
+            f'<span style="color:green;font-weight:bold;">🏁 Batch AI Reco finished — '
+            f'completed: {completed}, failed: {failed}</span>'
+        )
+
     def _batch_run_full_selected(self):
         """Run full reconstruction on all selected files with GPU queue management"""
         selected_files = [f for f in self.batch_file_main_list if f['checkbox'].isChecked()]
@@ -5262,16 +5365,27 @@ class TomoGUI(QWidget):
                     return None  #return None to indicate failure
 
         elif recon_type == 'full':
-            recon_way = self.recon_way_box_full.currentText()  
+            recon_way = self.recon_way_box_full.currentText()
             cor_val = file_info['cor_input'].text().strip()
-            rec_method = self.cor_full_method.currentText()  
+            rec_method = self.cor_full_method.currentText()
 
             if not cor_val:
-                self.log_output.append(
-                    f'<span style="color:orange;">⚠️ No COR value in batch table for {filename}, skipping</span>'
-                )
-                # Return None to skip this job - queue will handle it
-                return None
+                # Fall back to the top-bar Try COR input so batches don't
+                # skip files that never had a per-row COR filled in.
+                fallback = self.cor_input.text().strip()
+                if fallback:
+                    cor_val = fallback
+                    file_info['cor_input'].setText(cor_val)   # reflect in the table
+                    self.log_output.append(
+                        f'<span style="color:orange;">⚠️ No row COR for {filename}, '
+                        f'using Try-bar COR = {cor_val}</span>'
+                    )
+                else:
+                    self.log_output.append(
+                        f'<span style="color:orange;">⚠️ No COR value in batch table '
+                        f'for {filename} and Try-bar is empty, skipping</span>'
+                    )
+                    return None
 
             try:
                 cor = float(cor_val)
