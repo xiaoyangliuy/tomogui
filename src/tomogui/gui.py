@@ -4312,53 +4312,39 @@ class TomoGUI(QWidget):
         from PyQt5.QtCore import Qt
 
         if modifiers == Qt.ShiftModifier and self.batch_last_clicked_row is not None:
-            # Shift-click: select range
+            # Shift-click: check every row between the previously-clicked row
+            # and this one. COR propagation is optional — Batch AI Reco does
+            # not need per-row CORs, so we no longer refuse the range when
+            # the first row is empty.
             start_row = min(self.batch_last_clicked_row, row)
             end_row = max(self.batch_last_clicked_row, row)
 
-            # Get the first selected row's COR value for propagation
             first_cor = None
-            first_filename = None
-            for file_info in self.batch_file_list:
+            for file_info in self.batch_file_main_list:
                 if file_info['row'] == start_row:
                     first_cor = file_info['cor_input'].text().strip()
-                    first_filename = file_info['filename']
                     break
 
-            # Validate that first row has COR value
-            if not first_cor:
-                QMessageBox.warning(
-                    self, "Missing COR",
-                    f"The first selected file ({first_filename}) must have a COR value.\n"
-                    f"Please enter a COR value for this file before shift-selecting."
-                )
-                # Uncheck the current checkbox since shift-select failed
-                for file_info in self.batch_file_list:
-                    if file_info['row'] == row:
-                        file_info['checkbox'].setChecked(False)
-                        break
-                return
-
-            # Select all rows in range and propagate COR if not set
+            propagated = 0
             for r in range(start_row, end_row + 1):
-                for file_info in self.batch_file_list:
+                for file_info in self.batch_file_main_list:
                     if file_info['row'] == r:
-                        # Check the checkbox
                         file_info['checkbox'].setChecked(True)
-
-                        # Propagate COR from first if this row doesn't have one
-                        current_cor = file_info['cor_input'].text().strip()
-                        if not current_cor and first_cor:
+                        if first_cor and not file_info['cor_input'].text().strip():
                             file_info['cor_input'].setText(first_cor)
+                            propagated += 1
                         break
 
-            self.log_output.append(f'<span style="color:green;">✅ Selected rows {start_row} to {end_row} ({end_row - start_row + 1} files)</span>')
-            if first_cor:
-                propagated_count = sum(1 for r in range(start_row, end_row + 1)
-                                     for f in self.batch_file_list
-                                     if f['row'] == r and f['cor_input'].text().strip() == first_cor)
-                if propagated_count > 1:  # More than just the first one
-                    self.log_output.append(f'<span style="color:blue;">📍 Propagated COR value {first_cor} to {propagated_count - 1} file(s)</span>')
+            n = end_row - start_row + 1
+            self.log_output.append(
+                f'<span style="color:green;">✅ Selected rows {start_row}–{end_row} '
+                f'({n} files)</span>'
+            )
+            if propagated:
+                self.log_output.append(
+                    f'<span style="color:blue;">📍 Propagated COR {first_cor} to '
+                    f'{propagated} row(s) that had none</span>'
+                )
 
         # Update last clicked row
         self.batch_last_clicked_row = row
@@ -4967,7 +4953,7 @@ class TomoGUI(QWidget):
         completed = 0
         failed = 0
         for idx, file_info in enumerate(selected_files, 1):
-            proj_file = file_info['file']
+            proj_file = file_info.get('path') or file_info.get('file') or file_info.get('filename')
             self.log_output.append(
                 f'<span style="color:#1a8cff;">── [{idx}/{len(selected_files)}] '
                 f'{os.path.basename(proj_file)}</span>'
