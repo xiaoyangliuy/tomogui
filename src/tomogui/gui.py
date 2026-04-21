@@ -1503,8 +1503,9 @@ class TomoGUI(QWidget):
             _add_row(flag, "dspin", w, default=default, include=include)
 
 
-        # Stripe/ring filters
-        add_combo("--remove-stripe-method", ["none","fw","ti","vo-all"], default="none", include=False) #always include      
+        # Stripe/ring filters — default to 'fw' (Fourier-wavelet) so the most
+        # commonly-used ring removal is active out of the box.
+        add_combo("--remove-stripe-method", ["none","fw","ti","vo-all"], default="fw", include=False) #always include
         add_combo("--fw-filter", ["haar","db5","sym5","sym16"], default="sym16")
         add_spin("--fw-level", 0, 64, step=1, default=7)
         add_check("--fw-pad")
@@ -1932,7 +1933,9 @@ class TomoGUI(QWidget):
             _add_row(flag, "dspin", w, default=default, include=include)
 
         # Perfomance related settings
-        add_combo("--clear-folder", ["False","True"], default="False")
+        # Clear output folder before each run — always included, defaults True so
+        # stale partial reconstructions don't linger; user can flip to False.
+        add_combo("--clear-folder", ["False","True"], default="True", include=False)
         add_combo("--dtype", ["float32","float16"], default="float32", include=False) #always include
         add_spin("--start-column", 0, 10_000_000, step=1, default=0, include=False) #always include
         add_spin("--end-column", -1, 10_000_000, step=1, default=-1, include=False) #always include
@@ -4174,7 +4177,12 @@ class TomoGUI(QWidget):
             # Use selected (checked) files from the table; fall back to highlighted row
             for file_info in self.batch_file_main_list:
                 if file_info['checkbox'].isChecked():
-                    flist.append(file_info['file'])
+                    fp = (file_info.get('path')
+                          or file_info.get('file')
+                          or (os.path.join(data_folder, file_info['filename'])
+                              if file_info.get('filename') else None))
+                    if fp:
+                        flist.append(fp)
             if not flist and self.highlight_scan:
                 flist.append(self.highlight_scan)
             if not flist:
