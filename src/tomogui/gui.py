@@ -3391,6 +3391,79 @@ class TomoGUI(QWidget):
                 self.cor_input.setText(self._cor_input_prev)
                 self._cor_input_prev = None
 
+    def _run_ai_inference_for_file(self, proj_file, model_path=None):
+        """Run DINOv2 inference on the existing try-reconstruction TIFFs of
+        one file and write the predicted COR into the row + rot_cen.json.
+        Returns the predicted COR as a string on success, or None on failure.
+        Does NOT run try or full reconstruction — caller is responsible for
+        those (and must have run 'try' first so the TIFFs exist)."""
+        import re as _re
+        from argparse import Namespace as _NS
+        from PIL import Image as _PIL_Image
+        if model_path is None:
+            model_path = self.ai_model_path.text().strip()
+        if not model_path or not os.path.exists(model_path):
+            self.log_output.append('<span style="color:red;">❌ Invalid AI model path</span>')
+            return None
+        data_folder = self.data_path.text().strip()
+        proj_name = os.path.splitext(os.path.basename(proj_file))[0]
+        try_dir = os.path.join(f"{data_folder}_rec", "try_center", proj_name)
+        tiff_files = sorted(glob.glob(os.path.join(try_dir, "*.tiff")))
+        if not tiff_files:
+            self.log_output.append(
+                f'<span style="color:red;">❌ No TIFFs for {os.path.basename(proj_file)} '
+                f'in {try_dir} — try reconstruction did not run</span>'
+            )
+            return None
+        img_list, cor_list = [], []
+        for tiff in tiff_files:
+            m = _re.search(r'center(\d+\.\d+)', os.path.basename(tiff))
+            if not m:
+                continue
+            cor_list.append(float(m.group(1)))
+            img_list.append(np.array(_PIL_Image.open(tiff)).astype(np.float32))
+        if not img_list:
+            self.log_output.append('<span style="color:red;">❌ Could not parse COR values</span>')
+            return None
+        try:
+            from tomogui._tomocor_infer.inference import inference_pipeline
+        except ImportError as e:
+            self.log_output.append(f'<span style="color:red;">❌ Inference module error: {e}</span>')
+            return None
+        ai_args = _NS(infer_use_8bits=True, infer_downsample_factor=2,
+                      infer_num_windows=3, infer_seed_number=10,
+                      infer_model_path=model_path, infer_window_size=518)
+        try:
+            inference_pipeline(ai_args, np.array(img_list), np.array(cor_list), try_dir)
+        except Exception as e:
+            self.log_output.append(
+                f'<span style="color:red;">❌ AI inference failed for '
+                f'{os.path.basename(proj_file)}: {e}</span>'
+            )
+            return None
+        cor_txt = os.path.join(try_dir, 'center_of_rotation.txt')
+        if not os.path.exists(cor_txt):
+            return None
+        with open(cor_txt) as f:
+            lines = [line.strip() for line in f if line.strip()]
+        if not lines:
+            return None
+        ai_cor = lines[-1]
+        try:
+            float(ai_cor)
+        except ValueError:
+            return None
+        # Persist + reflect in the table
+        self.cor_data[proj_file] = ai_cor
+        if data_folder:
+            self._save_cor_data(data_folder, self.cor_data)
+        row = self._find_row_by_filepath(proj_file)
+        if row is not None:
+            w = self.batch_file_main_table.cellWidget(row, 2)
+            if w is not None:
+                w.setText(str(ai_cor))
+        return ai_cor
+
     # ------------------------------------------------------------------ #
     #  Sync Acquisition                                                    #
     # ------------------------------------------------------------------ #
@@ -5393,50 +5466,79 @@ class TomoGUI(QWidget):
         if reply != QMessageBox.Yes:
             return
 
+        num_gpus = self.batch_gpus_per_machine.value()
+        machine = self.batch_machine_box.currentText()
         self.log_output.append(
-            f'<span style="color:#1a8cff;font-weight:bold;">🤖 Starting Batch AI Reco on '
-            f'{len(selected_files)} files — using the current GUI tab settings '
-            f'(ring correction / phase / geometry / perf) for every file.</span>'
+            f'<span style="color:#1a8cff;font-weight:bold;">🤖 Batch AI Reco on '
+            f'{len(selected_files)} files using {num_gpus} GPU(s) — current GUI '
+            f'tab settings apply to every file.</span>'
         )
 
-        completed = 0
-        failed = 0
-        # _batch_active=True prevents the on_table_row_clicked handler from
-        # overwriting the current GUI params with each row's saved params.
+        # Mirror each file's per-row seed into the top-bar COR the moment
+        # _batch_run_with_queue dispatches that file's try job — not feasible
+        # because the queue runs subprocesses in parallel. Instead: for every
+        # file with a per-row COR, ensure the row's cor_input is populated so
+        # the try-reco subprocess builder (_build_batch_cmd) picks it up.
+        # (That builder already reads row_cor first, top-bar second.)
+        for fi in selected_files:
+            row_txt = fi['cor_input'].text().strip() if fi.get('cor_input') else ""
+            if not row_txt and top_bar_ok:
+                fi['cor_input'].setText(top_bar_txt)
+
         self._batch_active = True
         try:
-            for idx, file_info in enumerate(selected_files, 1):
-                proj_file = file_info.get('path') or file_info.get('file') or file_info.get('filename')
+            # ── Phase A: multi-GPU try reconstructions ───────────────
+            self.log_output.append(
+                '<span style="color:#1a8cff;">── Phase A: TRY reconstructions '
+                '(parallel across GPUs)…</span>'
+            )
+            QApplication.processEvents()
+            self._run_batch_with_queue(selected_files, recon_type='try',
+                                       num_gpus=num_gpus, machine=machine)
+
+            # ── Phase B: sequential DINOv2 inference per file ────────
+            self.log_output.append(
+                '<span style="color:#1a8cff;">── Phase B: DINOv2 inference (sequential)…</span>'
+            )
+            QApplication.processEvents()
+            inferred = 0
+            failed_inf = []
+            for idx, fi in enumerate(selected_files, 1):
+                proj_file = fi.get('path') or fi.get('file')
+                if not proj_file:
+                    continue
                 self.log_output.append(
-                    f'<span style="color:#1a8cff;">── [{idx}/{len(selected_files)}] '
-                    f'{os.path.basename(proj_file)}</span>'
+                    f'<span style="color:#888;">   [{idx}/{len(selected_files)}] '
+                    f'inference on {os.path.basename(proj_file)}</span>'
                 )
                 QApplication.processEvents()
+                ai_cor = self._run_ai_inference_for_file(proj_file, model_path)
+                if ai_cor is not None:
+                    inferred += 1
+                else:
+                    failed_inf.append(os.path.basename(proj_file))
+            self.log_output.append(
+                f'<span style="color:#1a8cff;">   Phase B done: {inferred} succeeded, '
+                f'{len(failed_inf)} failed.</span>'
+            )
 
-                # Select this row so try_ai_reconstruction() uses it
-                row = self._find_row_by_filepath(proj_file)
-                if row is None:
-                    self.log_output.append(f'<span style="color:red;">❌ Row for {proj_file} not found</span>')
-                    failed += 1
-                    continue
-                self.batch_file_main_table.selectRow(row)
-                self.on_table_row_clicked(row, 0)
-                QApplication.processEvents()
-
-                try:
-                    self.try_ai_reconstruction()   # runs try + inference + full (already wired)
-                    completed += 1
-                except Exception as e:
-                    self.log_output.append(
-                        f'<span style="color:red;">❌ AI Reco failed on {os.path.basename(proj_file)}: {e}</span>'
-                    )
-                    failed += 1
+            # ── Phase C: multi-GPU full reconstructions ──────────────
+            self.log_output.append(
+                '<span style="color:#1a8cff;">── Phase C: FULL reconstructions '
+                '(parallel across GPUs, using AI-predicted CORs)…</span>'
+            )
+            QApplication.processEvents()
+            # Only run full on files where inference actually produced a COR
+            good_for_full = [fi for fi in selected_files
+                             if os.path.basename(fi.get('path') or '')
+                             not in set(failed_inf)]
+            self._run_batch_with_queue(good_for_full, recon_type='full',
+                                       num_gpus=num_gpus, machine=machine)
         finally:
             self._batch_active = False
 
         self.log_output.append(
-            f'<span style="color:green;font-weight:bold;">🏁 Batch AI Reco finished — '
-            f'completed: {completed}, failed: {failed}</span>'
+            '<span style="color:green;font-weight:bold;">🏁 Batch AI Reco finished.</span>'
         )
 
     def _batch_run_full_selected(self):
