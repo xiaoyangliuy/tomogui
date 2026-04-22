@@ -5496,27 +5496,94 @@ class TomoGUI(QWidget):
             self._run_batch_with_queue(selected_files, recon_type='try',
                                        num_gpus=num_gpus, machine=machine)
 
-            # ── Phase B: sequential DINOv2 inference per file ────────
+            # ── Phase B: DINOv2 inference across num_gpus subprocesses ───
             self.log_output.append(
-                '<span style="color:#1a8cff;">── Phase B: DINOv2 inference (sequential)…</span>'
+                f'<span style="color:#1a8cff;">── Phase B: DINOv2 inference — '
+                f'spawning {num_gpus} worker process(es)…</span>'
             )
             QApplication.processEvents()
+            data_folder = self.data_path.text().strip()
+            # Distribute files round-robin across GPUs so each worker gets a
+            # roughly equal slice.
+            chunks = [[] for _ in range(num_gpus)]
+            for i, fi in enumerate(selected_files):
+                p = fi.get('path') or fi.get('file')
+                if p:
+                    chunks[i % num_gpus].append(p)
+            import subprocess as _sp
+            procs = []
+            for gpu_idx, paths in enumerate(chunks):
+                if not paths:
+                    continue
+                env = os.environ.copy()
+                env['CUDA_VISIBLE_DEVICES'] = str(gpu_idx)
+                cmd = [sys.executable, "-m", "tomogui._infer_worker",
+                       data_folder, model_path] + paths
+                p = _sp.Popen(cmd, env=env, stdout=_sp.PIPE, stderr=_sp.STDOUT,
+                              text=True, bufsize=1)
+                procs.append((p, gpu_idx, len(paths)))
+                self.log_output.append(
+                    f'<span style="color:#888;">   GPU {gpu_idx}: '
+                    f'{len(paths)} files dispatched</span>'
+                )
+            # Poll without blocking the Qt event loop
+            import time as _time
+            while procs:
+                QApplication.processEvents()
+                still = []
+                for p, gpu_idx, n in procs:
+                    if p.poll() is None:
+                        still = still + [(p, gpu_idx, n)]
+                    else:
+                        try:
+                            out, _ = p.communicate(timeout=1.0)
+                        except Exception:
+                            out = ""
+                        tag = "✅" if p.returncode == 0 else "⚠️"
+                        self.log_output.append(
+                            f'<span style="color:#888;">   {tag} GPU {gpu_idx} '
+                            f'worker finished (exit {p.returncode}, {n} files)</span>'
+                        )
+                        if out:
+                            for ln in out.splitlines()[-6:]:
+                                self.log_output.append(
+                                    f'<span style="color:#666;">     {ln}</span>'
+                                )
+                procs = still
+                if procs:
+                    _time.sleep(0.3)
+            # Now collect results — read each file's center_of_rotation.txt
             inferred = 0
             failed_inf = []
-            for idx, fi in enumerate(selected_files, 1):
+            for fi in selected_files:
                 proj_file = fi.get('path') or fi.get('file')
                 if not proj_file:
                     continue
-                self.log_output.append(
-                    f'<span style="color:#888;">   [{idx}/{len(selected_files)}] '
-                    f'inference on {os.path.basename(proj_file)}</span>'
-                )
-                QApplication.processEvents()
-                ai_cor = self._run_ai_inference_for_file(proj_file, model_path)
+                proj_name = os.path.splitext(os.path.basename(proj_file))[0]
+                try_dir = os.path.join(f"{data_folder}_rec", "try_center", proj_name)
+                cor_txt = os.path.join(try_dir, 'center_of_rotation.txt')
+                ai_cor = None
+                if os.path.exists(cor_txt):
+                    try:
+                        with open(cor_txt) as f:
+                            lines = [ln.strip() for ln in f if ln.strip()]
+                        if lines:
+                            ai_cor = lines[-1]
+                            float(ai_cor)  # validate
+                    except Exception:
+                        ai_cor = None
                 if ai_cor is not None:
+                    self.cor_data[proj_file] = ai_cor
+                    row = self._find_row_by_filepath(proj_file)
+                    if row is not None:
+                        w = self.batch_file_main_table.cellWidget(row, 2)
+                        if w is not None:
+                            w.setText(str(ai_cor))
                     inferred += 1
                 else:
                     failed_inf.append(os.path.basename(proj_file))
+            if data_folder:
+                self._save_cor_data(data_folder, self.cor_data)
             self.log_output.append(
                 f'<span style="color:#1a8cff;">   Phase B done: {inferred} succeeded, '
                 f'{len(failed_inf)} failed.</span>'
