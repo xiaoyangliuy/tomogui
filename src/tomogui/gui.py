@@ -5057,7 +5057,11 @@ class TomoGUI(QWidget):
         selected = []
         for file_info in self.batch_file_main_list:
             if file_info['checkbox'].isChecked():
-                selected.append(file_info['file'])
+                fp = (file_info.get('path')
+                      or file_info.get('file')
+                      or file_info.get('filename'))
+                if fp:
+                    selected.append(fp)
 
         if not selected:
             self.log_output.append('<span style="color:orange;">⚠️ No files selected for deletion</span>')
@@ -5512,7 +5516,7 @@ class TomoGUI(QWidget):
                     chunks[i % num_gpus].append(p)
             import subprocess as _sp
             import sys as _sys
-            procs = []
+            procs = []              # list of (Popen, gpu_idx, [paths])
             for gpu_idx, paths in enumerate(chunks):
                 if not paths:
                     continue
@@ -5522,7 +5526,17 @@ class TomoGUI(QWidget):
                        data_folder, model_path] + paths
                 p = _sp.Popen(cmd, env=env, stdout=_sp.PIPE, stderr=_sp.STDOUT,
                               text=True, bufsize=1)
-                procs.append((p, gpu_idx, len(paths)))
+                procs.append((p, gpu_idx, paths))
+                # Mark every row in this chunk as 'Inferring on GPU N'
+                for pth in paths:
+                    try:
+                        self._set_status_by_filename(
+                            os.path.basename(pth),
+                            f"Inferring on GPU {gpu_idx}",
+                            status_col=3, filename_col=1, color="#1a8cff"
+                        )
+                    except RuntimeError:
+                        pass
                 self.log_output.append(
                     f'<span style="color:#888;">   GPU {gpu_idx}: '
                     f'{len(paths)} files dispatched</span>'
@@ -5532,24 +5546,36 @@ class TomoGUI(QWidget):
             while procs:
                 QApplication.processEvents()
                 still = []
-                for p, gpu_idx, n in procs:
+                for p, gpu_idx, paths in procs:
                     if p.poll() is None:
-                        still = still + [(p, gpu_idx, n)]
+                        still.append((p, gpu_idx, paths))
                     else:
                         try:
                             out, _ = p.communicate(timeout=1.0)
                         except Exception:
                             out = ""
                         tag = "✅" if p.returncode == 0 else "⚠️"
+                        ok = (p.returncode == 0)
                         self.log_output.append(
                             f'<span style="color:#888;">   {tag} GPU {gpu_idx} '
-                            f'worker finished (exit {p.returncode}, {n} files)</span>'
+                            f'worker finished (exit {p.returncode}, {len(paths)} files)</span>'
                         )
                         if out:
                             for ln in out.splitlines()[-6:]:
                                 self.log_output.append(
                                     f'<span style="color:#666;">     {ln}</span>'
                                 )
+                        # Mark every row in this chunk as 'Inferred' (or 'Infer failed')
+                        status_txt = "Inferred" if ok else "Infer failed"
+                        status_col = "#27ae60" if ok else "#c0392b"
+                        for pth in paths:
+                            try:
+                                self._set_status_by_filename(
+                                    os.path.basename(pth), status_txt,
+                                    status_col=3, filename_col=1, color=status_col
+                                )
+                            except RuntimeError:
+                                pass
                 procs = still
                 if procs:
                     _time.sleep(0.3)
