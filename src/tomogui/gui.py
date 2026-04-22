@@ -607,6 +607,25 @@ class TomoGUI(QWidget):
         batch_ai_btn.setToolTip("Run AI Reco (try + inference + full) on every selected file, one at a time")
         batch_ai_btn.clicked.connect(self._batch_run_ai_selected)
         batch_ops.addWidget(batch_ai_btn)
+        fix_cor_btn = QPushButton("Fix COR Outliers")
+        fix_cor_btn.setStyleSheet("QPushButton { font-size: 10.5pt; color: #8e44ad; }")
+        fix_cor_btn.setToolTip("Detect outlier COR values among selected files and replace "
+                               "each outlier with the average of its two neighbours")
+        fix_cor_btn.clicked.connect(lambda: self._fix_cor_outliers())
+        batch_ops.addWidget(fix_cor_btn)
+        batch_ops.addWidget(QLabel("max Δ:"))
+        self.cor_outlier_max = QDoubleSpinBox()
+        self.cor_outlier_max.setRange(1.0, 1000.0)
+        self.cor_outlier_max.setDecimals(1)
+        self.cor_outlier_max.setSingleStep(5.0)
+        self.cor_outlier_max.setValue(50.0)
+        self.cor_outlier_max.setFixedWidth(70)
+        self.cor_outlier_max.setSuffix(" px")
+        self.cor_outlier_max.setToolTip("Maximum allowed |COR − series median| (pixels). "
+                                        "Any deviation greater than this is flagged as an outlier. "
+                                        "Tight-cluster series may use a smaller effective threshold "
+                                        "(max(abs, 5·MAD), capped at this value).")
+        batch_ops.addWidget(self.cor_outlier_max)
         delete_sel_btn = QPushButton("Delete Selected")
         delete_sel_btn.setStyleSheet("QPushButton { font-size: 10.5pt; color: #c62828; }")
         delete_sel_btn.setToolTip("Delete the selected HDF5 files from disk (with confirmation)")
@@ -4965,6 +4984,193 @@ class TomoGUI(QWidget):
             return
 
         self._run_batch_with_queue(selected_files, recon_type='try', num_gpus=num_gpus, machine=machine)
+
+    def _fix_cor_outliers(self, abs_thresh=10.0, mad_k=5.0, max_thresh=None):
+        # Read the cap from the GUI spinner if the caller didn't override it.
+        if max_thresh is None:
+            try:
+                max_thresh = float(self.cor_outlier_max.value())
+            except (AttributeError, ValueError, TypeError):
+                max_thresh = 50.0
+        """For the currently-checked set of files, detect outlier COR values
+        within each DATASET SERIES and replace them with the average of the
+        two closest non-outlier neighbours in the same series.
+
+        A "series" is derived from the filename: everything before the final
+        numeric index is treated as the series key. Examples:
+            UPC15_NMC811_SC_b1_Ni_edge_1124.h5   → series 'UPC15_NMC811_SC_b1_Ni_edge'
+            UPC15_NMC811_SC_b1_Mn_Elemental_1045 → series 'UPC15_NMC811_SC_b1_Mn_Elemental'
+
+        Files within a series are sorted by their numeric index so 'neighbour'
+        always means 'adjacent scan in the same series', regardless of how the
+        table happens to be sorted.
+
+        Outlier rule inside a series:
+          - thr = min(max_thresh, max(abs_thresh, mad_k * MAD))
+              • Small MAD (tight cluster)  → thr stays at abs_thresh (10 px).
+              • Growing MAD                → thr grows with 5 × MAD.
+              • MAD very large             → thr capped at max_thresh (100 px).
+          - Flag v if |v − median| > thr.
+          - Missing (empty) CORs also get marked for fill.
+
+        Replacement:
+          - Avg of the 2 nearest non-flagged neighbours by index in the series.
+          - For MISSING values only fill when those neighbours are close to
+            each other (|L − R| ≤ abs_thresh); otherwise skip — ambiguous
+            cluster boundary inside the series.
+
+        Defaults: abs_thresh=10 px, mad_k=5, max_thresh=100 px
+        (anything > 100 pixels from the series median is always an outlier).
+        """
+        import re
+        _IDX_RE = re.compile(r'^(.*?)[._-]*(\d+)$')
+
+        def _series_key(filename):
+            base = os.path.splitext(filename)[0]
+            m = _IDX_RE.match(base)
+            if m:
+                return m.group(1), int(m.group(2))
+            return base, 0
+        # 1) Collect selected rows in table order
+        selected = []         # list of [file_info, cor_value_or_None]
+        for file_info in self.batch_file_main_list:
+            if not file_info['checkbox'].isChecked():
+                continue
+            txt = file_info['cor_input'].text().strip()
+            try:
+                cor = float(txt)
+            except (ValueError, TypeError):
+                cor = None
+            selected.append([file_info, cor])
+        if len(selected) < 3:
+            self.log_output.append(
+                '<span style="color:orange;">⚠️ Need at least 3 selected files '
+                'to detect outliers.</span>'
+            )
+            return
+
+        def _median(arr):
+            s = sorted(arr)
+            m = len(s)
+            return s[m // 2] if m % 2 else 0.5 * (s[m // 2 - 1] + s[m // 2])
+
+        # 2) Group files by their filename series key
+        series_groups = {}     # prefix -> list of (idx_num, file_info, cor)
+        for file_info, cor in selected:
+            prefix, idx_num = _series_key(file_info['filename'])
+            series_groups.setdefault(prefix, []).append((idx_num, file_info, cor))
+
+        changes = []   # (file_info, old_text, new_value, series, reason)
+        skipped = []   # (file_info, series, reason)
+
+        for prefix, entries in series_groups.items():
+            # Sort entries by the trailing numeric index so "neighbour" is
+            # the adjacent scan in the same series, not the row above/below
+            # the current table sort.
+            entries.sort(key=lambda t: t[0])
+            n = len(entries)
+            if n < 2:
+                continue                              # lonely file, nothing to compare
+
+            values = [e[2] for e in entries if e[2] is not None]
+            if len(values) < 2:
+                # Not enough numeric CORs in this series to compute anything
+                for _, fi, c in entries:
+                    if c is None:
+                        skipped.append((fi, prefix, "series has <2 numeric CORs"))
+                continue
+
+            med = _median(values)
+            mad = _median([abs(x - med) for x in values])
+            thr = min(max_thresh, max(abs_thresh, mad_k * mad))
+
+            # Flag: empty cells + numeric outliers against this series' median
+            flagged = set()
+            for i, (_, fi, c) in enumerate(entries):
+                if c is None:
+                    flagged.add(i)
+                elif abs(c - med) > thr:
+                    flagged.add(i)
+
+            if not flagged:
+                continue
+
+            # Replace each flagged entry with avg of its 2 nearest non-flagged
+            # neighbours within the SAME series.
+            for i in sorted(flagged):
+                was_missing = entries[i][2] is None
+                left = None
+                for j in range(i - 1, -1, -1):
+                    if j in flagged or entries[j][2] is None:
+                        continue
+                    left = entries[j][2]
+                    break
+                right = None
+                for j in range(i + 1, n):
+                    if j in flagged or entries[j][2] is None:
+                        continue
+                    right = entries[j][2]
+                    break
+                fi = entries[i][1]
+                if left is not None and right is not None:
+                    if was_missing and abs(left - right) > abs_thresh:
+                        skipped.append((fi, prefix,
+                                        f"neighbours {left:.2f} / {right:.2f} differ by "
+                                        f"{abs(left - right):.2f}  (> {abs_thresh})"))
+                        continue
+                    replacement = 0.5 * (left + right)
+                    reason = f"avg({left:.2f}, {right:.2f})"
+                elif left is not None:
+                    if was_missing:
+                        skipped.append((fi, prefix,
+                                        f"only left neighbour known ({left:.2f})"))
+                        continue
+                    replacement = left
+                    reason = f"left only = {left:.2f}"
+                elif right is not None:
+                    if was_missing:
+                        skipped.append((fi, prefix,
+                                        f"only right neighbour known ({right:.2f})"))
+                        continue
+                    replacement = right
+                    reason = f"right only = {right:.2f}"
+                else:
+                    continue
+                old_txt = fi['cor_input'].text().strip()
+                new_txt = f"{replacement:.2f}"
+                fi['cor_input'].setText(new_txt)
+                changes.append((fi, old_txt, replacement, prefix, reason))
+
+        if not changes and not skipped:
+            self.log_output.append(
+                '<span style="color:green;">✅ No COR outliers detected in any '
+                'series.</span>'
+            )
+            return
+
+        # 3) Persist to rot_cen.json
+        data_folder = self.data_path.text().strip()
+        for fi, _, newv, _, _ in changes:
+            self.cor_data[fi['path']] = f"{newv:.2f}"
+        if data_folder:
+            self._save_cor_data(data_folder, self.cor_data)
+
+        # 4) Log
+        self.log_output.append(
+            f'<span style="color:#8e44ad;">🧹 COR outliers (max Δ = {max_thresh:g} px): '
+            f'{len(changes)} replaced, {len(skipped)} left unchanged across '
+            f'{len(series_groups)} series.</span>'
+        )
+        for fi, old, newv, series, reason in changes:
+            self.log_output.append(
+                f'   <b>{fi["filename"]}</b> <span style="color:#888;">[{series}]</span>'
+                f' : {old or "(empty)"} → {newv:.2f}   [{reason}]'
+            )
+        for fi, series, reason in skipped:
+            self.log_output.append(
+                f'<span style="color:#888;">   <b>{fi["filename"]}</b> [{series}] '
+                f'skipped — {reason}</span>'
+            )
 
     def _batch_run_ai_selected(self):
         """Run AI Reco (Try → inference → Full) sequentially on all selected files.
