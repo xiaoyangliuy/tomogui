@@ -5338,26 +5338,56 @@ class TomoGUI(QWidget):
             self.log_output.append('<span style="color:red;">❌ Invalid AI model path</span>')
             return
 
-        # AI Reco uses the top-bar Try COR as the starting guess for the
-        # search; per-row CORs are written by the inference step, so we only
-        # need to confirm the top-bar has a valid starting number.
-        try_cor_txt = self.cor_input.text().strip()
-        if self.cor_method_box.currentText() != "auto":
+        # AI Reco seed policy (per file): row COR if set, else top-bar COR.
+        # Validate up front that every selected file will have SOMETHING to
+        # seed from — either its own row COR, or the top-bar fallback.
+        top_bar_txt = self.cor_input.text().strip()
+        top_bar_ok = False
+        try:
+            float(top_bar_txt)
+            top_bar_ok = True
+        except (ValueError, TypeError):
+            top_bar_ok = False
+
+        missing_seed = []
+        for fi in selected_files:
+            row_txt = fi['cor_input'].text().strip() if fi.get('cor_input') else ""
             try:
-                float(try_cor_txt)
+                float(row_txt)
+                row_ok = True
             except (ValueError, TypeError):
-                self.log_output.append(
-                    '<span style="color:red;">❌ Top-bar Try COR is empty or invalid — '
-                    'AI Reco needs a starting guess. Set it before running batch.</span>'
-                )
-                return
+                row_ok = False
+            if not row_ok and not top_bar_ok and self.cor_method_box.currentText() != "auto":
+                missing_seed.append(fi['filename'])
+
+        if missing_seed:
+            self.log_output.append(
+                '<span style="color:red;">❌ AI Reco needs a starting COR for every '
+                'selected file. The following have neither a row COR nor a valid '
+                'top-bar fallback:</span>'
+            )
+            for fn in missing_seed[:10]:
+                self.log_output.append(f'   {fn}')
+            if len(missing_seed) > 10:
+                self.log_output.append(f'   (+{len(missing_seed) - 10} more)')
+            return
+
+        # Count how many will use the row COR vs the top-bar fallback
+        row_cor_count = sum(1 for fi in selected_files
+                            if fi.get('cor_input') and fi['cor_input'].text().strip()
+                            and fi['cor_input'].text().strip()
+                                .replace('.', '', 1).replace('-', '', 1).isdigit())
+        seed_summary = (
+            f"{row_cor_count} file(s) will use their table COR; "
+            f"{len(selected_files) - row_cor_count} will fall back to the top-bar "
+            f"({top_bar_txt or 'auto'})."
+        )
 
         reply = QMessageBox.question(
             self, 'Confirm Batch AI Reco',
             f'Run AI Reco (try + inference + full) sequentially on '
             f'{len(selected_files)} selected files?\n'
-            f'Starting COR guess: {try_cor_txt or "auto"}  (from top-bar, applied to every file).\n'
-            'Per-row CORs are not required — inference fills them in.',
+            f'Seed policy per file: row COR if present, else top-bar.\n{seed_summary}',
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No
         )
         if reply != QMessageBox.Yes:
