@@ -2681,10 +2681,11 @@ class TomoGUI(QWidget):
             self.log_output.append(f'✅ Loaded params for {os.path.basename(proj_file)}')
 
     def _apply_series_tint(self):
-        """Shade the filename cell (column 1) with a rotating colour per
-        dataset series, so adjacent rows in the same series share a tint and
-        the boundary between series is visually obvious. Series is derived
-        from the filename: everything before the final numeric index."""
+        """Shade the filename cell (column 1) and the COR cell (column 2) with
+        a rotating colour per dataset series so adjacent rows in the same
+        series share a tint and the boundary between series is visually obvious.
+        Series is derived from the filename: everything before the final numeric index.
+        """
         import re
         idx_re = re.compile(r'^(.*?)[._-]*(\d+)$')
 
@@ -2693,19 +2694,21 @@ class TomoGUI(QWidget):
             m = idx_re.match(base)
             return m.group(1) if m else base
 
-        # A small set of subtle tints that read on the dark theme.
+        # Visible tints that read clearly on both dark and light themes.
         palette = [
-            QColor(0x1e, 0x2a, 0x3a),   # deep blue
-            QColor(0x1e, 0x3a, 0x2a),   # deep green
-            QColor(0x3a, 0x2a, 0x1e),   # deep brown/amber
-            QColor(0x2a, 0x1e, 0x3a),   # deep purple
-            QColor(0x3a, 0x1e, 0x2e),   # deep magenta
-            QColor(0x1e, 0x36, 0x3a),   # deep teal
+            QColor(42,  72, 108),   # blue
+            QColor(42, 108,  60),   # green
+            QColor(120, 72,  30),   # amber
+            QColor( 90, 42, 120),   # purple
+            QColor(130, 50,  80),   # magenta
+            QColor( 30,  90, 108),  # teal
         ]
 
         table = self.batch_file_main_table
         prev_series = None
         colour_idx = -1
+        n_series = 0
+        n_rows = 0
         for row in range(table.rowCount()):
             item = table.item(row, 1)
             if item is None:
@@ -2714,7 +2717,27 @@ class TomoGUI(QWidget):
             if s != prev_series:
                 colour_idx = (colour_idx + 1) % len(palette)
                 prev_series = s
+                n_series += 1
+            # Tint the filename cell
             item.setBackground(palette[colour_idx])
+            # Tint the COR cell too (via its QLineEdit stylesheet — the COR
+            # column uses a cell widget, so setBackground on an item doesn't apply).
+            cor_w = table.cellWidget(row, 2)
+            if cor_w is not None:
+                c = palette[colour_idx]
+                cor_w.setStyleSheet(
+                    f"QLineEdit {{ background: rgb({c.red()},{c.green()},{c.blue()}); "
+                    f"color: #ffffff; }}"
+                )
+            n_rows += 1
+        # One summary log line so it's visible if something went wrong
+        try:
+            self.log_output.append(
+                f'<span style="color:#888;">🎨 series tint applied — '
+                f'{n_series} series across {n_rows} rows</span>'
+            )
+        except Exception:
+            pass
 
     def _on_main_cor_edited(self, file_path:str, row:int):
         """
