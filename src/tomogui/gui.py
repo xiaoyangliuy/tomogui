@@ -260,6 +260,7 @@ class TomoGUI(QWidget):
         self._running_full_file = None  # track which file is under local full recon
         self.cor_path = None
         self._recon_params_data = None  # per-dataset params cache; None = needs reload
+        self._batch_active = False      # while True, per-scan param load/save is suppressed
         self._sync_watcher = None       # SyncWatcher thread
         self._sync_queue = []
         self._sync_processing = False
@@ -2694,8 +2695,10 @@ class TomoGUI(QWidget):
             pass    
 
     def on_table_row_clicked(self, row, column):
-        # Save current GUI params for the previously selected dataset before switching
-        if self.highlight_scan:
+        # Save current GUI params for the previously selected dataset before switching.
+        # During a batch run we intentionally keep whatever the user set in the GUI
+        # and apply it to every file, so skip the per-scan save/load in that case.
+        if not self._batch_active and self.highlight_scan:
             self._save_current_scan_params()
         # Get the filename from the clicked row
         filename_item = self.batch_file_main_table.item(row, 1)  # Column 1 contains the filename
@@ -2707,8 +2710,9 @@ class TomoGUI(QWidget):
                 self.highlight_row = row #gives index of the self.batch_file_table_list
         self._update_full_btn_state()  # grey out only if this file is running locally
         self.log_output.append(f'Click on {self.highlight_scan} now for other operations')
-        # Load saved params for newly selected dataset (if any)
-        self._load_scan_params(self.highlight_scan)
+        # Load saved params for newly selected dataset only when NOT batch-processing
+        if not self._batch_active:
+            self._load_scan_params(self.highlight_scan)
 
     def load_config(self):
         dialog = QFileDialog(self)
@@ -3096,7 +3100,11 @@ class TomoGUI(QWidget):
                     self.log_output.append(f'<span style="color:red;">\u26a0\ufe0f Could not remove {temp_try}: {e}</span>')
 
     def try_ai_reconstruction(self):
-        """Run Try reconstruction then AI inference to find best COR."""
+        """Run Try reconstruction then AI inference to find best COR.
+
+        Starting-COR policy: prefer the currently-highlighted row's COR if it
+        is a valid number; otherwise fall back to the top-bar Try COR input.
+        This applies to both single-file and batch invocations."""
         import re
         from argparse import Namespace
         from PIL import Image as _PIL_Image
@@ -3105,6 +3113,26 @@ class TomoGUI(QWidget):
         if not model_path or not os.path.exists(model_path):
             self.log_output.append('<span style="color:red;">❌ Invalid AI model path</span>')
             return
+
+        # Resolve the starting COR: row first, then top-bar.
+        row_cor = ""
+        if self.highlight_row is not None:
+            w = self.batch_file_main_table.cellWidget(self.highlight_row, 2)
+            if w is not None:
+                row_cor = w.text().strip()
+        bar_cor = self.cor_input.text().strip()
+        chosen_cor = row_cor or bar_cor
+        if chosen_cor and self.cor_method_box.currentText() != "auto":
+            # Mirror the chosen value into the top-bar so try_reconstruction()
+            # (which reads self.cor_input) uses the right starting guess.
+            self._cor_input_prev = bar_cor
+            self.cor_input.setText(chosen_cor)
+            self.log_output.append(
+                f'🤖 AI Reco starting COR = <b>{chosen_cor}</b>  '
+                f'(source: {"row" if row_cor else "top-bar"})'
+            )
+        else:
+            self._cor_input_prev = None
 
         # Step 1: run regular try reconstruction (blocks until done)
         ok = self.try_reconstruction()
@@ -3186,6 +3214,12 @@ class TomoGUI(QWidget):
                 self.log_output.append(f'<span style="color:orange;">⚠️ Output not found: {cor_txt}</span>')
         except Exception as e:
             self.log_output.append(f'<span style="color:red;">❌ AI Reco error: {e}</span>')
+        finally:
+            # Restore the top-bar so a row-specific starting COR we borrowed
+            # earlier doesn't leak into later single-file clicks.
+            if getattr(self, "_cor_input_prev", None) is not None:
+                self.cor_input.setText(self._cor_input_prev)
+                self._cor_input_prev = None
 
     # ------------------------------------------------------------------ #
     #  Sync Acquisition                                                    #
@@ -4974,37 +5008,44 @@ class TomoGUI(QWidget):
 
         self.log_output.append(
             f'<span style="color:#1a8cff;font-weight:bold;">🤖 Starting Batch AI Reco on '
-            f'{len(selected_files)} files...</span>'
+            f'{len(selected_files)} files — using the current GUI tab settings '
+            f'(ring correction / phase / geometry / perf) for every file.</span>'
         )
 
         completed = 0
         failed = 0
-        for idx, file_info in enumerate(selected_files, 1):
-            proj_file = file_info.get('path') or file_info.get('file') or file_info.get('filename')
-            self.log_output.append(
-                f'<span style="color:#1a8cff;">── [{idx}/{len(selected_files)}] '
-                f'{os.path.basename(proj_file)}</span>'
-            )
-            QApplication.processEvents()
-
-            # Select this row so try_ai_reconstruction() uses it
-            row = self._find_row_by_filepath(proj_file)
-            if row is None:
-                self.log_output.append(f'<span style="color:red;">❌ Row for {proj_file} not found</span>')
-                failed += 1
-                continue
-            self.batch_file_main_table.selectRow(row)
-            self.on_table_row_clicked(row, 0)
-            QApplication.processEvents()
-
-            try:
-                self.try_ai_reconstruction()   # runs try + inference + full (already wired)
-                completed += 1
-            except Exception as e:
+        # _batch_active=True prevents the on_table_row_clicked handler from
+        # overwriting the current GUI params with each row's saved params.
+        self._batch_active = True
+        try:
+            for idx, file_info in enumerate(selected_files, 1):
+                proj_file = file_info.get('path') or file_info.get('file') or file_info.get('filename')
                 self.log_output.append(
-                    f'<span style="color:red;">❌ AI Reco failed on {os.path.basename(proj_file)}: {e}</span>'
+                    f'<span style="color:#1a8cff;">── [{idx}/{len(selected_files)}] '
+                    f'{os.path.basename(proj_file)}</span>'
                 )
-                failed += 1
+                QApplication.processEvents()
+
+                # Select this row so try_ai_reconstruction() uses it
+                row = self._find_row_by_filepath(proj_file)
+                if row is None:
+                    self.log_output.append(f'<span style="color:red;">❌ Row for {proj_file} not found</span>')
+                    failed += 1
+                    continue
+                self.batch_file_main_table.selectRow(row)
+                self.on_table_row_clicked(row, 0)
+                QApplication.processEvents()
+
+                try:
+                    self.try_ai_reconstruction()   # runs try + inference + full (already wired)
+                    completed += 1
+                except Exception as e:
+                    self.log_output.append(
+                        f'<span style="color:red;">❌ AI Reco failed on {os.path.basename(proj_file)}: {e}</span>'
+                    )
+                    failed += 1
+        finally:
+            self._batch_active = False
 
         self.log_output.append(
             f'<span style="color:green;font-weight:bold;">🏁 Batch AI Reco finished — '
@@ -5088,9 +5129,20 @@ class TomoGUI(QWidget):
 
     def _run_batch_with_queue(self, selected_files, recon_type, num_gpus, machine):
         """
-        Run batch reconstructions with GPU queue management
+        Run batch reconstructions with GPU queue management.
+        Sets _batch_active so row-click events during the queue do NOT
+        swap in each row's saved params — the current GUI tab settings
+        (ring correction, phase, geometry, performance, ...) are used
+        uniformly for every file in this batch.
         """
-        self.log_output.append(f'<span style="color:magenta;">🔍 DEBUG: Starting {recon_type} batch, batch_running={self.batch_running}</span>')
+        self._batch_active = True
+        self.log_output.append(
+            f'<span style="color:magenta;">🔍 DEBUG: Starting {recon_type} batch, '
+            f'batch_running={self.batch_running}</span>'
+        )
+        self.log_output.append(
+            '<span style="color:#888;">⚙️ Using current GUI tab settings for every file in this batch.</span>'
+        )
 
         jobs_to_add = [(f, recon_type, machine) for f in selected_files]
 
@@ -5282,6 +5334,7 @@ class TomoGUI(QWidget):
 
         # Reset batch running flag so new batches can start
         self.batch_running = False
+        self._batch_active = False   # re-enable per-scan param load/save on clicks
         self.log_output.append('<span style="color:blue;">✅ batch_running set to False, ready for new batch</span>')
 
 
@@ -5294,6 +5347,7 @@ class TomoGUI(QWidget):
 
         # ===== CRITICAL: stop scheduling FIRST =====
         self.batch_running = False
+        self._batch_active = False   # re-enable per-scan param load/save on clicks
 
         # ===== Kill all running processes =====
         for gpu_id, (process, file_info, job_recon_type) in list(self.batch_running_jobs.items()):
