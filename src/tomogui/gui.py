@@ -626,6 +626,24 @@ class TomoGUI(QWidget):
                                         "Tight-cluster series may use a smaller effective threshold "
                                         "(max(abs, 5·MAD), capped at this value).")
         batch_ops.addWidget(self.cor_outlier_max)
+        # Per-series minimum size (% of series median). Files smaller than this
+        # are auto-unchecked and marked "Skipped (small)" — typically aborted
+        # scans with tiny file size compared to their series peers.
+        batch_ops.addWidget(QLabel("min size:"))
+        self.size_min_pct = QDoubleSpinBox()
+        self.size_min_pct.setRange(0.0, 100.0)
+        self.size_min_pct.setDecimals(0)
+        self.size_min_pct.setSingleStep(5.0)
+        self.size_min_pct.setValue(50.0)
+        self.size_min_pct.setFixedWidth(60)
+        self.size_min_pct.setSuffix(" %")
+        self.size_min_pct.setToolTip(
+            "Minimum file size as a % of the series median. "
+            "Files smaller than this are auto-unchecked and marked "
+            "'Skipped (small)' — typically aborted scans. "
+            "Set to 0 to disable."
+        )
+        batch_ops.addWidget(self.size_min_pct)
         delete_sel_btn = QPushButton("Delete Selected")
         delete_sel_btn.setStyleSheet("QPushButton { font-size: 10.5pt; color: #c62828; }")
         delete_sel_btn.setToolTip("Delete the selected HDF5 files from disk (with confirmation)")
@@ -2495,6 +2513,9 @@ class TomoGUI(QWidget):
         # Visual grouping by dataset series (adjacent rows with same filename
         # prefix get the same subtle background tint on the filename cell).
         self._apply_series_tint()
+        # Auto-uncheck any file whose size is a small fraction of its series
+        # median — aborted scans with no useful data.
+        self._auto_skip_small_size_in_series()
         # Re-enable sorting after populating the table
         #self.batch_file_main_table.setSortingEnabled(True)
         # Highlight the first row
@@ -2738,6 +2759,74 @@ class TomoGUI(QWidget):
             )
         except Exception:
             pass
+
+    def _auto_skip_small_size_in_series(self):
+        """For each series group in the table, compute the median file size and
+        auto-uncheck + mark 'Skipped (small)' any file whose size is below
+        `self.size_min_pct`% of that median. Aborted/partial scans typically
+        produce files a tiny fraction of the size of their series peers.
+        Set the spinner to 0 to disable."""
+        import re
+        idx_re = re.compile(r'^(.*?)[._-]*(\d+)$')
+
+        def series_key(name):
+            base = os.path.splitext(name)[0]
+            m = idx_re.match(base)
+            return m.group(1) if m else base
+
+        try:
+            pct = float(self.size_min_pct.value())
+        except (AttributeError, ValueError, TypeError):
+            pct = 50.0
+        if pct <= 0.0:
+            return   # feature disabled
+
+        # Group files by series and gather (file_info, size_bytes)
+        groups = {}
+        for fi in self.batch_file_main_list:
+            try:
+                sz = os.path.getsize(fi['path'])
+            except OSError:
+                sz = 0
+            fi['_size_bytes'] = sz
+            groups.setdefault(series_key(fi['filename']), []).append(fi)
+
+        n_skipped = 0
+        for sk, entries in groups.items():
+            sizes = sorted(e['_size_bytes'] for e in entries if e['_size_bytes'] > 0)
+            if len(sizes) < 2:
+                continue        # lonely file, no basis for comparison
+            median = sizes[len(sizes) // 2] if len(sizes) % 2 else 0.5 * (
+                sizes[len(sizes) // 2 - 1] + sizes[len(sizes) // 2])
+            cutoff = median * (pct / 100.0)
+            for fi in entries:
+                too_small = fi['_size_bytes'] < cutoff
+                fi['skipped_small'] = too_small
+                if too_small:
+                    n_skipped += 1
+                    row = fi.get('row')
+                    # Uncheck
+                    try:
+                        fi['checkbox'].setChecked(False)
+                    except Exception:
+                        pass
+                    # Mark status
+                    if row is not None:
+                        item = QTableWidgetItem("Skipped (small)")
+                        item.setForeground(QColor("#999"))
+                        self.batch_file_main_table.setItem(row, 3, item)
+                        fi['status'] = item
+                        fi['recon_status'] = 'gray'
+                        # Dim the left-border indicator
+                        cb_w = self.batch_file_main_table.cellWidget(row, 0)
+                        if cb_w is not None:
+                            cb_w.setStyleSheet("QWidget { border-left: 6px solid #666; }")
+
+        if n_skipped:
+            self.log_output.append(
+                f'<span style="color:#888;">🗑 auto-skipped {n_skipped} file(s) with '
+                f'size &lt; {pct:g}% of their series median.</span>'
+            )
 
     def _on_main_cor_edited(self, file_path:str, row:int):
         """
