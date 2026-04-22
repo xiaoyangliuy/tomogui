@@ -5903,15 +5903,23 @@ class TomoGUI(QWidget):
 
         # properly read method text from combo box
         if recon_type == 'try':
-            recon_way = self.recon_way_box.currentText()  # <<< CHANGED
-            cor_val = self.cor_input.text().strip()
-            rec_method = self.cor_method_box.currentText()  # <<< FIX (was widget object)
+            recon_way = self.recon_way_box.currentText()
+            rec_method = self.cor_method_box.currentText()
+            # Per-file seed: row COR first, top-bar fallback. This matters for
+            # Batch AI Reco where each file gets its own starting guess.
+            row_cor = ""
+            if file_info.get('cor_input') is not None:
+                try:
+                    row_cor = file_info['cor_input'].text().strip()
+                except Exception:
+                    row_cor = ""
+            cor_val = row_cor or self.cor_input.text().strip()
             if rec_method == 'manual':
                 try:
                     cor = float(cor_val)
                 except ValueError:
                     self.log_output.append(
-                        f'<span style="color:red;">❌ Invalid COR value "{cor_val}" for {filename}, skipping</span>'
+                        f'<span style="color:red;">❌ Invalid COR "{cor_val}" for {filename}, skipping</span>'
                     )
                     return None  #return None to indicate failure
 
