@@ -3,6 +3,18 @@ Themes
 
 TomoGUI supports bright and dark color themes for improved visibility and reduced eye strain during long working sessions.
 
+.. figure:: /_static/screenshots/theme_light.png
+   :alt: Light theme
+   :align: center
+
+   Light theme.
+
+.. figure:: /_static/screenshots/theme_dark.png
+   :alt: Dark theme
+   :align: center
+
+   Dark theme.
+
 Theme Toggle
 ------------
 

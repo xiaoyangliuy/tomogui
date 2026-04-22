@@ -3,6 +3,12 @@ HDF5 Data Viewer
 
 The HDF5 Data Viewer provides direct visualization of raw HDF5 data files with advanced features for examining projection data and metadata.
 
+.. figure:: /_static/screenshots/hdf5_viewer_overview.png
+   :alt: HDF5 Viewer
+   :align: center
+
+   HDF5 Viewer tab with the dataset tree on the left and a preview on the right.
+
 Overview
 --------
 
@@ -281,4 +287,4 @@ See Also
 - :doc:`batch_tab` - Batch processing overview
 - :doc:`main_tab` - Main reconstruction controls
 - :doc:`../user_guide/reconstruction` - Reconstruction workflow
-- :doc:`../advanced/data_quality` - Data quality assessment
+- :doc:`../advanced/troubleshooting` - Troubleshooting

@@ -1,39 +1,61 @@
 Interface Overview
 ==================
 
-TomoGUI features a comprehensive interface divided into control panels and visualization areas.
+TomoGUI is split into a left-hand control panel (parameters, tabs, log) and
+a right-hand visualisation area (image, contrast, slice controls).
+
+.. figure:: /_static/screenshots/main_window.png
+   :alt: TomoGUI main window
+   :align: center
+
+   TomoGUI main window.
 
 Main Window Layout
 ------------------
 
-The application window consists of three main areas:
-
 .. code-block:: text
 
    ┌─────────────────────────────────────────────────────────┐
-   │ TomoGUI                                            🌙/☀  │
+   │ TomoGUI                                         🌙 / ☀   │
    ├──────────────────┬──────────────────────────────────────┤
    │                  │                                      │
-   │  Control Panel   │     Visualization Area              │
+   │  Control Panel   │     Visualisation Area              │
    │  (Left)          │     (Right)                         │
    │                  │                                      │
-   │  - Data Folder   │  - Matplotlib Canvas                │
-   │  - File Select   │  - Navigation Toolbar               │
-   │  - Tabs          │  - Colormap Controls                │
-   │    • Main        │  - Contrast Controls                │
-   │    • Recon       │  - Slice Slider                     │
-   │    • Hardening   │  - TomoLog Panel                    │
-   │    • Phase       │                                      │
-   │    • Rings       │                                      │
-   │    • Geometry    │                                      │
-   │    • Data        │                                      │
-   │    • Performance │                                      │
-   │    • Config      │                                      │
-   │    • Batch       │                                      │
+   │  Data Folder     │  Matplotlib canvas                  │
+   │  Projection File │  Navigation toolbar                 │
+   │                  │  Colormap, Contrast, Auto-5/95 %    │
+   │  Tabs            │  Slice / COR slider                 │
+   │   • Main         │  TomoLog panel                      │
+   │   • Recon        │                                      │
+   │   • Hardening    │                                      │
+   │   • Phase        │                                      │
+   │   • Rings        │                                      │
+   │   • Geometry     │                                      │
+   │   • Data         │                                      │
+   │   • Performance  │                                      │
+   │   • Advanced Cfg │                                      │
+   │   • Batch        │                                      │
+   │   • HDF5 Viewer  │                                      │
    │                  │                                      │
-   │  - Log Output    │                                      │
+   │  Log Output      │                                      │
    │                  │                                      │
    └──────────────────┴──────────────────────────────────────┘
+
+Top tab bar
+-----------
+
+.. figure:: /_static/screenshots/tab_bar.png
+   :alt: Top tab bar
+   :align: center
+
+The tab bar switches between:
+
+- **Main** — single-file workflow (Try, Full, AI Reco, TomoLog)
+- **Batch** — multi-file workflow (checkboxes, series grouping, Fix COR
+  Outliers, Batch AI Reco)
+- **HDF5 Viewer** — inspect HDF5 structure / previews
+- **Advanced Config** — remote hosts, number of GPUs, AI model path, etc.
 
 Left Panel
 ----------
@@ -44,364 +66,122 @@ Data Selection
 At the top of the left panel:
 
 **Data Folder**
-   - Text field showing current data directory
-   - Browse button to select new folder
-   - Stores path for subsequent file operations
+   - Current data directory
+   - *Browse Data Folder* button
+   - Path is persisted between sessions
 
 **Projection File**
-   - Dropdown list of .h5 files in data folder
-   - Sorted by modification time (newest first)
-   - Refresh button to reload file list
+   - Dropdown of ``.h5`` files in the folder, newest first
+   - Refresh button reloads the list
+
+**Sync Acquisition**
+   - Automatically refreshes the dropdown as new files appear in the
+     acquisition folder (useful during a live scan)
+
+.. figure:: /_static/screenshots/main_tab_file_picker.png
+   :alt: Data folder and file picker
+   :align: center
 
 Tab System
 ~~~~~~~~~~
 
-The left panel contains a tab widget with multiple configuration sections:
-
 Main Tab
 ^^^^^^^^
 
-Quick access to basic reconstruction:
+.. figure:: /_static/screenshots/main_tab_overview.png
+   :alt: Main tab
+   :align: center
 
-- **Try Reconstruction**
-   - Recon method (recon/recon_steps)
-   - CUDA device selection
-   - COR method (auto/manual)
-   - COR value input
-   - Try button
-   - View Try button
-   - Batch Try button
+Single-file workflow:
 
-- **Full Reconstruction**
-   - Same controls as Try
-   - Full button
-   - View Full button
-   - Batch Full button
+- **Try / Full** — reconstruction controls (see :doc:`reconstruction`)
+- **AI Reco** — DINOv2 automatic COR (see :doc:`ai_reco`)
+- **TomoLog** — PDF report generator with per-file auto-contrast
+- **View Try / View Full** — quick access to the reconstructed output
 
-- **Preset Buttons**
-   - BeamHarden: Configure for absorption
-   - Phase: Configure for phase contrast
-   - Laminography: Configure for laminography
+Reconstruction Parameters Tabs
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-- **Parameter Management**
-   - Save params button
-   - Load params button
-   - Reset params button
+Per-category tabs below the Main tab expose every TomoCuPy flag:
 
-Reconstruction Tab
-^^^^^^^^^^^^^^^^^^
+- **Recon** — algorithm (``FBP``, ``gridrec``, ``LPREC``), binning,
+  nsino-per-chunk, start / end slice, etc.
+- **Hardening** — beam hardening correction
+- **Phase** — phase retrieval (alpha, energy, distance, …)
+- **Rings** — ring removal (*sigma*, *level*, algorithm)
+- **Geometry** — rotation axis geometry
+- **Data** — projection range, flat/dark correction
+- **Performance** — nthreads, blocked_views, etc.
 
-Fine-tune reconstruction algorithms:
-
-- Algorithm selection
-- Iteration parameters
-- Regularization settings
-- Binning options
-
-See :doc:`../features/reconstruction_params` for details.
-
-Hardening Tab
-^^^^^^^^^^^^^
-
-Beam hardening correction:
-
-- Polynomial coefficients
-- Correction strength
-- Material-specific presets
-
-Phase Tab
-^^^^^^^^^
-
-Phase retrieval parameters:
-
-- Phase method selection
-- Propagation distance
-- Energy settings
-- Delta/beta ratios
-
-Rings Tab
-^^^^^^^^^
-
-Ring artifact removal:
-
-- Ring removal methods
-- Filter parameters
-- Strength controls
-
-Geometry Tab
-^^^^^^^^^^^^
-
-Geometric corrections:
-
-- Rotation axis offset
-- Sample position
-- Detector tilt
-- Coordinate transformations
-
-Data Tab
-^^^^^^^^
-
-Data preprocessing:
-
-- Flat/dark field correction
-- Data normalization
-- ROI selection
-- Projection filtering
-
-Performance Tab
-^^^^^^^^^^^^^^^
-
-Performance tuning:
-
-- Memory management
-- GPU utilization
-- Batch size
-- Threading options
+Settings are stored **per dataset** in a JSON sidecar so reloading a file
+restores its last-used parameters.
 
 Advanced Config Tab
 ^^^^^^^^^^^^^^^^^^^
 
-Direct configuration file editing:
+.. figure:: /_static/screenshots/advanced_config_tab.png
+   :alt: Advanced Config tab
+   :align: center
 
-- Try reconstruction config editor
-- Full reconstruction config editor
-- Load/Save config buttons
-- Enable config checkbox
+Cross-cutting configuration:
 
-Batch Processing Tab
-^^^^^^^^^^^^^^^^^^^^
+- **Remote host** — SSH user@host for running reconstruction on a remote
+  GPU node
+- **Number of GPUs** — used by Batch AI Reco to split Phase B inference
+- **AI model path** — absolute path to the ``.pth`` checkpoint
+- **Extra flags** — free-form extra command-line flags appended to
+  ``tomocupy`` invocations
 
-Comprehensive batch operations:
+Batch Tab
+^^^^^^^^^
 
-- File list with COR values
-- Machine selection
-- GPU configuration
-- Parallel processing
-- See :doc:`../features/batch_tab` for full details
+See :doc:`batch_processing` for the full batch workflow. Key controls:
 
-Log Output
-~~~~~~~~~~
+.. figure:: /_static/screenshots/batch_tab_overview.png
+   :alt: Batch tab
+   :align: center
 
-Bottom section of left panel:
+- file table with per-row checkbox, COR, status, and series tint
+- **Batch Try**, **Batch Full**, **Batch AI Reco**
+- **Fix COR Outliers** with *Max COR delta* (default 50 px)
+- **Delete Selected** (with confirmation)
+- Shift-click range selection
 
-- Scrollable text area
-- Color-coded messages
-- Command history
-- Progress indicators
-- Clear/Save buttons
+HDF5 Viewer Tab
+^^^^^^^^^^^^^^^
+
+.. figure:: /_static/screenshots/hdf5_viewer_overview.png
+   :alt: HDF5 Viewer
+   :align: center
+
+Browse the HDF5 tree, view dataset metadata, and preview 2D slices without
+leaving TomoGUI.
 
 Right Panel
 -----------
 
-Visualization Area
-~~~~~~~~~~~~~~~~~~
-
-Main display for reconstruction results:
-
-**Matplotlib Canvas**
-   - Interactive image display
-   - Zoom, pan capabilities
-   - Crosshair cursor
-   - Coordinate display
-
-**Navigation Toolbar**
-   - Home: Reset view
-   - Back/Forward: View history
-   - Pan: Click and drag
-   - Zoom: Rectangle selection
-   - Configure subplots
-   - Save figure
-
-Toolbar Controls
-~~~~~~~~~~~~~~~~
-
-Below the matplotlib toolbar:
-
-**Coordinate Label**
-   - Shows cursor position
-   - Displays pixel value
-   - Format: (x, y) = value
-
-**Colormap Selector**
-   - Dropdown with standard colormaps
-   - gray, viridis, plasma, inferno, magma, cividis
-   - Changes apply immediately
-
-**Image Control Buttons**
-   - Draw: Enable ROI selection box
-   - Auto: Automatic contrast adjustment
-   - Reset: Reset contrast to original
-
-**Min/Max Inputs**
-   - Manual contrast control
-   - Enter numeric values
-   - Press Enter to apply
-
-**Theme Toggle**
-   - 🌙 Moon: Switch to dark theme
-   - ☀ Sun: Switch to bright theme
-
-Slice Slider
-~~~~~~~~~~~~
-
-Horizontal slider below canvas:
-
-- Navigate through 3D reconstruction slices
-- Shows current slice index
-- Click or drag to change slice
-- Keyboard arrows supported
-
-TomoLog Panel
+Image display
 ~~~~~~~~~~~~~
 
-Integration with TomoLog service:
+- matplotlib canvas with navigation toolbar (pan, zoom, save)
+- colormap selector (gray, viridis, magma, …)
+- **Contrast** — Min / Max inputs, *Auto* (5 – 95 % percentile), *Reset*
+- **Slice / COR slider** — when viewing a try-center grid, the slider
+  scrubs through candidate CORs; when viewing a Full reconstruction, the
+  slider scrubs through slices.
 
-- Beamline selection
-- Cloud configuration
-- URL input
-- Coordinate inputs (x, y, z)
-- Scan number
-- Visualization controls
-- Apply button
-- Help button
+The auto-contrast behaviour also applies to TomoLog when Min/Max are
+blank.
 
-Status Indicators
------------------
+Log Output
+~~~~~~~~~~
 
-Throughout the interface, status is indicated by:
+Structured log with colour-coded statuses:
 
-Icons
-~~~~~
+- ✓ success (green)
+- ✗ failure (red)
+- ⚠ warning (amber)
+- 🚀 job start
 
-- 🚀 Process started
-- ✅ Success (green)
-- ❌ Failure (red)
-- ⚠️ Warning (orange)
-- 📍 Information (blue)
-- 🖥️ Remote execution
-- 🏁 Batch complete
-
-Colors
-~~~~~~
-
-Text colors in log output:
-
-- **Green**: Success messages
-- **Red**: Error messages
-- **Orange**: Warnings
-- **Blue**: Information
-- **Black/White**: Normal text (theme-dependent)
-
-Interactive Elements
---------------------
-
-Mouse Operations
-~~~~~~~~~~~~~~~~
-
-**Canvas**:
-   - Left click: Select point
-   - Click + Drag: Pan (when pan tool active)
-   - Click + Drag: Zoom box (when zoom tool active)
-   - Scroll wheel: Zoom in/out
-
-**Slider**:
-   - Click: Jump to slice
-   - Drag: Continuous navigation
-
-**Table (Batch tab)**:
-   - Click checkbox: Select/deselect file
-   - Click button: Perform action
-   - Type in COR field: Edit value
-
-Keyboard Shortcuts
-~~~~~~~~~~~~~~~~~~
-
-Currently limited keyboard support. Mouse is primary input method.
-
-**Planned shortcuts**:
-   - Ctrl+T: Toggle theme
-   - Ctrl+R: Refresh file list
-   - Ctrl+S: Save current view
-   - Arrow keys: Navigate slices
-
-Workflow Integration
---------------------
-
-Typical workflow through the interface:
-
-1. **Setup** (Top of left panel)
-   - Select data folder
-   - Choose projection file
-
-2. **Configure** (Left panel tabs)
-   - Set reconstruction parameters
-   - Choose appropriate tab for settings
-
-3. **Execute** (Main tab buttons)
-   - Run try reconstruction
-   - View results
-   - Adjust parameters
-   - Run full reconstruction
-
-4. **Analyze** (Right panel)
-   - Visualize results
-   - Adjust contrast
-   - Navigate slices
-   - Save figures
-
-5. **Batch** (Batch tab)
-   - Process multiple files
-   - Manage COR values
-   - Monitor progress
-
-Customization
--------------
-
-Window Size
-~~~~~~~~~~~
-
-Default: 1650 x 950 pixels
-
-Resize by dragging window edges. Layout adapts to window size.
-
-Panel Proportions
-~~~~~~~~~~~~~~~~~
-
-Left and right panels have 4:4 ratio. Currently fixed, but may become adjustable in future versions.
-
-Themes
-~~~~~~
-
-Choose between bright and dark themes. See :doc:`themes` for details.
-
-Accessibility
--------------
-
-The interface is designed with accessibility in mind:
-
-- High contrast ratios
-- Readable font sizes
-- Clear visual indicators
-- Consistent layout
-- Tooltips on hover
-
-For users with visual impairments:
-   - Use dark theme for reduced glare
-   - Adjust screen magnification as needed
-   - Status uses both color and symbols
-
-Getting Help
-------------
-
-Interface elements provide help through:
-
-- **Tooltips**: Hover over buttons and controls
-- **Help buttons**: In-app documentation links
-- **Log messages**: Detailed operation feedback
-- **This documentation**: Comprehensive guides
-
-For specific features, see:
-   - :doc:`getting_started` - Basic operations
-   - :doc:`reconstruction` - Reconstruction workflow
-   - :doc:`batch_processing` - Batch operations
-   - :doc:`../features/batch_tab` - Batch tab details
+During Batch AI Phase B, per-file lines such as
+``[infer-worker] OK /data/.../sample_007.h5 => 1024.3`` stream live.

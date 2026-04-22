@@ -5568,7 +5568,27 @@ class TomoGUI(QWidget):
                     chunks[i % num_gpus].append(p)
             import subprocess as _sp
             import sys as _sys
-            procs = []              # list of (Popen, gpu_idx, [paths])
+            import threading as _thr
+            import queue as _queue
+            import time as _time
+
+            line_q = _queue.Queue()
+            procs = []   # list of (Popen, gpu_idx, [paths], reader_thread)
+
+            def _drain(pipe, gpu_idx, q):
+                try:
+                    for ln in iter(pipe.readline, ''):
+                        q.put((gpu_idx, ln.rstrip()))
+                finally:
+                    try:
+                        pipe.close()
+                    except Exception:
+                        pass
+
+            total_b = sum(len(c) for c in chunks)
+            done_b = 0
+            ok_set = set()    # basenames whose worker reported OK
+
             for gpu_idx, paths in enumerate(chunks):
                 if not paths:
                     continue
@@ -5578,14 +5598,16 @@ class TomoGUI(QWidget):
                        data_folder, model_path] + paths
                 p = _sp.Popen(cmd, env=env, stdout=_sp.PIPE, stderr=_sp.STDOUT,
                               text=True, bufsize=1)
-                procs.append((p, gpu_idx, paths))
-                # Mark every row in this chunk as 'Inferring on GPU N'
+                th = _thr.Thread(target=_drain, args=(p.stdout, gpu_idx, line_q),
+                                 daemon=True)
+                th.start()
+                procs.append((p, gpu_idx, paths, th))
+                # "Queued for inference" for every file in this chunk
                 for pth in paths:
                     try:
                         self._set_status_by_filename(
-                            os.path.basename(pth),
-                            f"Inferring on GPU {gpu_idx}",
-                            status_col=3, filename_col=1, color="#1a8cff"
+                            os.path.basename(pth), f"Queued infer (GPU {gpu_idx})",
+                            status_col=3, filename_col=1, color="#8899aa"
                         )
                     except RuntimeError:
                         pass
@@ -5593,44 +5615,134 @@ class TomoGUI(QWidget):
                     f'<span style="color:#888;">   GPU {gpu_idx}: '
                     f'{len(paths)} files dispatched</span>'
                 )
-            # Poll without blocking the Qt event loop
-            import time as _time
+
+            # Poll: drain line_q as workers report per-file status and push
+            # those updates into the table + progress bar.
+            progress_bar = None
+            try:
+                if getattr(self, 'progress_window', None) and \
+                        self.progress_window.isVisible():
+                    progress_bar = self.progress_window.batch_progress_bar
+                    self.progress_window.batch_status_label.setText(
+                        f"Phase B (inference): 0/{total_b}"
+                    )
+            except Exception:
+                progress_bar = None
+
             while procs:
                 QApplication.processEvents()
-                still = []
-                for p, gpu_idx, paths in procs:
-                    if p.poll() is None:
-                        still.append((p, gpu_idx, paths))
-                    else:
-                        try:
-                            out, _ = p.communicate(timeout=1.0)
-                        except Exception:
-                            out = ""
-                        tag = "✅" if p.returncode == 0 else "⚠️"
-                        ok = (p.returncode == 0)
-                        self.log_output.append(
-                            f'<span style="color:#888;">   {tag} GPU {gpu_idx} '
-                            f'worker finished (exit {p.returncode}, {len(paths)} files)</span>'
-                        )
-                        if out:
-                            for ln in out.splitlines()[-6:]:
-                                self.log_output.append(
-                                    f'<span style="color:#666;">     {ln}</span>'
-                                )
-                        # Mark every row in this chunk as 'Inferred' (or 'Infer failed')
-                        status_txt = "Inferred" if ok else "Infer failed"
-                        status_col = "#27ae60" if ok else "#c0392b"
-                        for pth in paths:
+                # Drain all lines currently in the queue
+                drained = 0
+                try:
+                    while True:
+                        gpu_idx, ln = line_q.get_nowait()
+                        drained += 1
+                        if not ln:
+                            continue
+                        # [infer-worker] OK /path/to/file => 1234.5
+                        if "[infer-worker] OK " in ln:
                             try:
-                                self._set_status_by_filename(
-                                    os.path.basename(pth), status_txt,
-                                    status_col=3, filename_col=1, color=status_col
-                                )
-                            except RuntimeError:
-                                pass
+                                after = ln.split("[infer-worker] OK ", 1)[1]
+                                fpath = after.split(" =>", 1)[0].strip()
+                                base = os.path.basename(fpath)
+                            except Exception:
+                                base = None
+                            if base and base not in ok_set:
+                                ok_set.add(base)
+                                done_b += 1
+                                try:
+                                    self._set_status_by_filename(
+                                        base, "Inferred",
+                                        status_col=3, filename_col=1,
+                                        color="#27ae60"
+                                    )
+                                except RuntimeError:
+                                    pass
+                        elif "[infer-worker] SKIP " in ln:
+                            try:
+                                base = os.path.basename(ln.split("[infer-worker] SKIP ", 1)[1].split(":")[0].strip())
+                            except Exception:
+                                base = None
+                            if base:
+                                done_b += 1
+                                try:
+                                    self._set_status_by_filename(
+                                        base, "Infer skipped",
+                                        status_col=3, filename_col=1,
+                                        color="#c0392b"
+                                    )
+                                except RuntimeError:
+                                    pass
+                        elif "[infer-worker] FAIL " in ln:
+                            try:
+                                base = os.path.basename(ln.split("[infer-worker] FAIL ", 1)[1].split(":")[0].strip())
+                            except Exception:
+                                base = None
+                            if base:
+                                done_b += 1
+                                try:
+                                    self._set_status_by_filename(
+                                        base, "Infer failed",
+                                        status_col=3, filename_col=1,
+                                        color="#c0392b"
+                                    )
+                                except RuntimeError:
+                                    pass
+                        elif ln.startswith("[infer-worker] "):
+                            # summary lines (GPU=... done)
+                            self.log_output.append(
+                                f'<span style="color:#666;">   {ln}</span>'
+                            )
+                except _queue.Empty:
+                    pass
+
+                if progress_bar is not None and total_b:
+                    pct = int(100 * done_b / total_b)
+                    progress_bar.setValue(pct)
+                    try:
+                        self.progress_window.batch_status_label.setText(
+                            f"Phase B (inference): {done_b}/{total_b}"
+                        )
+                    except Exception:
+                        pass
+
+                still = []
+                for p, gpu_idx, paths, th in procs:
+                    if p.poll() is None:
+                        still.append((p, gpu_idx, paths, th))
+                    else:
+                        ok = (p.returncode == 0)
+                        tag = "✅" if ok else "⚠️"
+                        self.log_output.append(
+                            f'<span style="color:#888;">   {tag} GPU {gpu_idx} worker '
+                            f'finished (exit {p.returncode}, {len(paths)} files)</span>'
+                        )
+                        # Fallback: for any file in this chunk that never
+                        # reported OK/SKIP/FAIL (e.g. worker crashed midway),
+                        # mark it as failed.
+                        for pth in paths:
+                            base = os.path.basename(pth)
+                            if base in ok_set:
+                                continue
+                            # Look at current status; if still "Queued infer ..."
+                            # upgrade to Infer failed.
+                            r = self._find_row_by_filename(base)
+                            if r is not None:
+                                st_item = self.batch_file_main_table.item(r, 3)
+                                txt = st_item.text() if st_item else ""
+                                if txt.startswith("Queued infer"):
+                                    self._set_status_by_filename(
+                                        base,
+                                        "Infer failed" if not ok else "Inferred",
+                                        status_col=3, filename_col=1,
+                                        color=("#c0392b" if not ok else "#27ae60")
+                                    )
+                                    if ok:
+                                        ok_set.add(base)
+                                    done_b += 1
                 procs = still
-                if procs:
-                    _time.sleep(0.3)
+                if procs or not line_q.empty():
+                    _time.sleep(0.2)
             # Now collect results — read each file's center_of_rotation.txt
             inferred = 0
             failed_inf = []
