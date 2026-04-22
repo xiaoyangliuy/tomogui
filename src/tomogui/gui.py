@@ -5511,13 +5511,14 @@ class TomoGUI(QWidget):
                 if p:
                     chunks[i % num_gpus].append(p)
             import subprocess as _sp
+            import sys as _sys
             procs = []
             for gpu_idx, paths in enumerate(chunks):
                 if not paths:
                     continue
                 env = os.environ.copy()
                 env['CUDA_VISIBLE_DEVICES'] = str(gpu_idx)
-                cmd = [sys.executable, "-m", "tomogui._infer_worker",
+                cmd = [_sys.executable, "-m", "tomogui._infer_worker",
                        data_folder, model_path] + paths
                 p = _sp.Popen(cmd, env=env, stdout=_sp.PIPE, stderr=_sp.STDOUT,
                               text=True, bufsize=1)
