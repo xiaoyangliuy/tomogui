@@ -2492,6 +2492,9 @@ class TomoGUI(QWidget):
             # Apply colored left border indicator based on reconstruction status
             # Create a colored indicator in the checkbox column
             checkbox_widget.setStyleSheet(f"QWidget {{ border-left: 6px solid {row_color}; }}")
+        # Visual grouping by dataset series (adjacent rows with same filename
+        # prefix get the same subtle background tint on the filename cell).
+        self._apply_series_tint()
         # Re-enable sorting after populating the table
         #self.batch_file_main_table.setSortingEnabled(True)
         # Highlight the first row
@@ -2676,6 +2679,42 @@ class TomoGUI(QWidget):
         if proj_file in self._recon_params_data:
             self._apply_params_to_gui(self._recon_params_data[proj_file])
             self.log_output.append(f'✅ Loaded params for {os.path.basename(proj_file)}')
+
+    def _apply_series_tint(self):
+        """Shade the filename cell (column 1) with a rotating colour per
+        dataset series, so adjacent rows in the same series share a tint and
+        the boundary between series is visually obvious. Series is derived
+        from the filename: everything before the final numeric index."""
+        import re
+        idx_re = re.compile(r'^(.*?)[._-]*(\d+)$')
+
+        def series_key(name):
+            base = os.path.splitext(name)[0]
+            m = idx_re.match(base)
+            return m.group(1) if m else base
+
+        # A small set of subtle tints that read on the dark theme.
+        palette = [
+            QColor(0x1e, 0x2a, 0x3a),   # deep blue
+            QColor(0x1e, 0x3a, 0x2a),   # deep green
+            QColor(0x3a, 0x2a, 0x1e),   # deep brown/amber
+            QColor(0x2a, 0x1e, 0x3a),   # deep purple
+            QColor(0x3a, 0x1e, 0x2e),   # deep magenta
+            QColor(0x1e, 0x36, 0x3a),   # deep teal
+        ]
+
+        table = self.batch_file_main_table
+        prev_series = None
+        colour_idx = -1
+        for row in range(table.rowCount()):
+            item = table.item(row, 1)
+            if item is None:
+                continue
+            s = series_key(item.text())
+            if s != prev_series:
+                colour_idx = (colour_idx + 1) % len(palette)
+                prev_series = s
+            item.setBackground(palette[colour_idx])
 
     def _on_main_cor_edited(self, file_path:str, row:int):
         """
