@@ -2760,6 +2760,38 @@ class TomoGUI(QWidget):
         except Exception:
             pass
 
+    def _auto_contrast_for_file(self, proj_file, lo_pct=5, hi_pct=95):
+        """Compute (vmin, vmax) as formatted strings from the 5–95 % percentile
+        of a representative slice of the reconstructed volume. Returns
+        (None, None) if no TIFFs are available.
+
+        Prefers the full reconstruction (`{data}_rec/{proj}_rec/*.tiff`) —
+        that's what tomolog uploads. Falls back to the try-center TIFFs if
+        full is not available.
+        """
+        data_folder = self.data_path.text().strip()
+        if not data_folder:
+            return (None, None)
+        proj_name = os.path.splitext(os.path.basename(proj_file))[0]
+        full_dir = os.path.join(f"{data_folder}_rec", f"{proj_name}_rec")
+        tiffs = sorted(glob.glob(os.path.join(full_dir, "*.tiff")))
+        if not tiffs:
+            try_dir = os.path.join(f"{data_folder}_rec", "try_center", proj_name)
+            tiffs = sorted(glob.glob(os.path.join(try_dir, "*.tiff")))
+        if not tiffs:
+            return (None, None)
+        # Take the middle slice as representative
+        mid_path = tiffs[len(tiffs) // 2]
+        try:
+            arr = np.array(Image.open(mid_path)).astype(np.float32)
+            lo = float(np.percentile(arr, lo_pct))
+            hi = float(np.percentile(arr, hi_pct))
+            if hi <= lo:
+                return (None, None)
+            return (f"{lo:.6g}", f"{hi:.6g}")
+        except Exception:
+            return (None, None)
+
     def _auto_skip_small_size_in_series(self):
         """For each series group in the table, compute the median file size and
         auto-uncheck + mark 'Skipped (small)' any file whose size is below
@@ -4490,6 +4522,12 @@ class TomoGUI(QWidget):
                 flist.append(filename)
         
         note_value = self.get_note_value()
+        auto_contrast = (vmin == "" and vmax == "")
+        if auto_contrast:
+            self.log_output.append(
+                '<span style="color:#888;">ℹ️ min/max blank — per-file 5–95% '
+                'percentile contrast will be computed from each reconstruction.</span>'
+            )
         for input_fn in flist:
             cmd = [
                 "tomolog", "run",
@@ -4502,10 +4540,24 @@ class TomoGUI(QWidget):
                 "--idz", z,
                 "--note", note_value
             ]
-            if vmin != "":
-                cmd.extend(["--min", vmin])
-            if vmax != "":
-                cmd.extend(["--max", vmax])
+            if auto_contrast:
+                avmin, avmax = self._auto_contrast_for_file(input_fn)
+                if avmin is not None and avmax is not None:
+                    cmd.extend(["--min", avmin, "--max", avmax])
+                    self.log_output.append(
+                        f'<span style="color:#888;">  auto contrast {os.path.basename(input_fn)}: '
+                        f'min={avmin}, max={avmax}</span>'
+                    )
+                else:
+                    self.log_output.append(
+                        f'<span style="color:orange;">⚠️ no reconstruction TIFFs for '
+                        f'{os.path.basename(input_fn)} — tomolog will use its own default contrast.</span>'
+                    )
+            else:
+                if vmin != "":
+                    cmd.extend(["--min", vmin])
+                if vmax != "":
+                    cmd.extend(["--max", vmax])
             extra_params = self.extra_params_input.text().strip()
             if extra_params:
                 cmd.extend(extra_params.split())
