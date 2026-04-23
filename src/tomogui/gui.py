@@ -6086,18 +6086,38 @@ class TomoGUI(QWidget):
                                     cor_txt = os.path.join(
                                         f"{data_folder}_rec", "try_center",
                                         proj_name, "center_of_rotation.txt")
-                                    if os.path.exists(cor_txt):
-                                        with open(cor_txt) as _f:
-                                            _lines = [ln.strip() for ln in _f if ln.strip()]
-                                        if _lines:
-                                            cor_val = float(_lines[-1].split()[-1])
-                                            self._set_cor_cell(file_info, cor_val)
-                                    else:
+                                    if not os.path.exists(cor_txt):
                                         status_text = "Infer no-output"
                                         status_color = "#c0392b"
-                                except Exception:
+                                        self.log_output.append(
+                                            f'<span style="color:red;">   ✗ '
+                                            f'{proj_name}: center_of_rotation.txt '
+                                            f'does NOT exist at {cor_txt}</span>'
+                                        )
+                                    else:
+                                        with open(cor_txt) as _f:
+                                            _lines = [ln.strip() for ln in _f if ln.strip()]
+                                        if not _lines:
+                                            status_text = "Infer empty"
+                                            status_color = "#c0392b"
+                                            self.log_output.append(
+                                                f'<span style="color:red;">   ✗ '
+                                                f'{proj_name}: center_of_rotation.txt '
+                                                f'is empty</span>'
+                                            )
+                                        else:
+                                            cor_val = float(_lines[-1].split()[-1])
+                                            ok = self._set_cor_cell(file_info, cor_val)
+                                            if not ok:
+                                                status_text = "Infer cell-fail"
+                                                status_color = "#c0392b"
+                                except Exception as _e:
                                     status_text = "Infer parse-error"
                                     status_color = "#c0392b"
+                                    self.log_output.append(
+                                        f'<span style="color:red;">   ✗ '
+                                        f'completion parse-error: {_e}</span>'
+                                    )
                             else:  # full
                                 # Check output directory for actual slice numbers
                                 status_text, status_color = self._get_full_recon_status(file_info["filename"])
@@ -6462,70 +6482,92 @@ class TomoGUI(QWidget):
                     )
 
     def _set_cor_cell(self, file_info, cor_val):
-        """Robustly update a batch-table row's COR cell. Tries the stored
-        ``file_info['cor_input']`` widget first, then falls back to a live
-        ``cellWidget(row, 2)`` lookup in case the stored reference is stale
-        after a table rebuild. Also updates ``self.cor_data``, logs the old
-        → new transition, and nudges Qt to repaint."""
+        """Robustly update a batch-table row's COR cell. Returns True iff
+        at least one widget was actually updated. Always logs what happened
+        so the user can see whether the AI value reached the cell or not."""
+        base = os.path.basename(file_info.get('filename', '') or '')
         try:
             txt = f"{float(cor_val):.2f}"
         except (ValueError, TypeError):
-            return
+            self.log_output.append(
+                f'<span style="color:red;">   ✗ COR {base}: invalid value '
+                f'{cor_val!r} from AI — cell NOT updated</span>'
+            )
+            return False
+
         old_txt = ""
-        hit = False
+        widgets_seen = 0
+        widgets_written = 0
         w = file_info.get('cor_input')
         if w is not None:
+            widgets_seen += 1
             try:
                 old_txt = w.text().strip()
                 w.setText(txt)
-                hit = True
-            except RuntimeError:
-                pass
-        # Always also try the live cellWidget — a stale file_info ref is
-        # cheap to defend against.
+                widgets_written += 1
+            except RuntimeError as e:
+                self.log_output.append(
+                    f'<span style="color:red;">   ✗ COR {base}: stored '
+                    f'widget is dead ({e}) — falling through to live '
+                    f'cellWidget lookup</span>'
+                )
+        # Always also try the live cellWidget by row lookup.
         try:
-            r = self._find_row_by_filename(
-                os.path.basename(file_info.get('filename', '')))
+            r = self._find_row_by_filename(base)
         except Exception:
             r = None
         if r is not None:
             live_w = self.batch_file_main_table.cellWidget(r, 2)
             if live_w is not None and live_w is not w:
+                widgets_seen += 1
                 try:
                     if not old_txt:
                         old_txt = live_w.text().strip()
                     live_w.setText(txt)
-                    hit = True
-                except RuntimeError:
-                    pass
-        if hit:
-            path = file_info.get('path')
-            if path:
-                self.cor_data[path] = txt
-            # Diagnostic — make it obvious when the AI-chosen value equals
-            # what was already in the cell (either the seed or a prior run).
-            base = os.path.basename(file_info.get('filename', '') or '')
-            try:
-                unchanged = (old_txt and
-                             abs(float(old_txt) - float(txt)) < 1e-6)
-            except (ValueError, TypeError):
-                unchanged = False
-            if unchanged:
-                self.log_output.append(
-                    f'<span style="color:#888;">   ≈ COR {base}: AI returned '
-                    f'the same value ({txt}) as was already in the cell.</span>'
-                )
-            elif old_txt:
-                self.log_output.append(
-                    f'<span style="color:#1a8cff;">   ✎ COR {base}: '
-                    f'{old_txt} → {txt}</span>'
-                )
-            else:
-                self.log_output.append(
-                    f'<span style="color:#1a8cff;">   ✎ COR {base}: '
-                    f'(empty) → {txt}</span>'
-                )
-            QApplication.processEvents()
+                    widgets_written += 1
+                except RuntimeError as e:
+                    self.log_output.append(
+                        f'<span style="color:red;">   ✗ COR {base}: live '
+                        f'cellWidget setText failed ({e})</span>'
+                    )
+
+        if widgets_written == 0:
+            self.log_output.append(
+                f'<span style="color:red;">   ✗ COR {base}: no writable '
+                f'widget found (file_info[\'cor_input\']={w!r}, row={r!r}) '
+                f'— UI cell NOT updated. AI value was {txt}.</span>'
+            )
+            return False
+
+        path = file_info.get('path')
+        if path:
+            self.cor_data[path] = txt
+
+        try:
+            unchanged = (old_txt and
+                         abs(float(old_txt) - float(txt)) < 1e-6)
+        except (ValueError, TypeError):
+            unchanged = False
+        if unchanged:
+            self.log_output.append(
+                f'<span style="color:#888;">   ≈ COR {base}: AI returned '
+                f'the same value ({txt}) as was already in the cell '
+                f'[{widgets_written}/{widgets_seen} widget(s) updated]</span>'
+            )
+        elif old_txt:
+            self.log_output.append(
+                f'<span style="color:#1a8cff;">   ✎ COR {base}: '
+                f'{old_txt} → {txt} '
+                f'[{widgets_written}/{widgets_seen} widget(s) updated]</span>'
+            )
+        else:
+            self.log_output.append(
+                f'<span style="color:#1a8cff;">   ✎ COR {base}: '
+                f'(empty) → {txt} '
+                f'[{widgets_written}/{widgets_seen} widget(s) updated]</span>'
+            )
+        QApplication.processEvents()
+        return True
 
     def _on_infer_output(self, process, filename, file_info):
         """Stream inference worker stdout. Parse `[infer-worker] OK <path> => <cor>`
