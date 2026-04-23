@@ -52,40 +52,41 @@ access across users.
 Fix COR Outliers
 ----------------
 
-Given a set of checked rows:
+One click does two things for the currently-checked set of rows, using
+filename-series grouping (``^(.*?)[._-]*(\d+)$`` on the filename stem).
 
-1. Group rows by **filename series** using the regex
-   ``^(.*?)[._-]*(\d+)$`` — the part before the trailing numeric index
-   is the series key.
+**Pass 1 — outlier replacement**
+
+1. Group rows by series.
 2. Within each series, compute ``median`` and ``MAD``.
 3. Flag any COR deviating by more than
    ``min(max_delta, max(10, 5·MAD))`` from the series median.
-4. Replace each flagged COR with its series median.
+4. Replace each flagged COR with the average of its two nearest
+   non-flagged neighbours by index in the same series.
 
-``max_delta`` is the *Max COR delta* spinbox on the Batch tab (default
-50 px). The lower bound of ``max(10, 5·MAD)`` prevents a very tight
-series from flagging everything slightly off the median.
+``max_delta`` is the *Max COR delta* spinbox (default 50 px). The
+``max(10, 5·MAD)`` lower bound prevents a very tight series from
+flagging every point.
+
+**Pass 2 — missing-COR fill**
+
+Any selected row still empty after pass 1 is filled with the
+**mean** of all CORs in its series across the **whole table** — donors
+can be checked or unchecked, anywhere in the list. Series with no
+donors are left empty and reported.
 
 .. figure:: /_static/screenshots/batch_tab_fix_cor_outliers.png
    :alt: Fix COR Outliers confirmation
    :align: center
 
-The confirmation dialog lists each flagged row with its current and
-proposed COR; nothing changes until you accept.
-
 Why series grouping?
 ~~~~~~~~~~~~~~~~~~~~
 
-A sliding-window approach (as used in earlier versions) was confusing
-for users: a series of 5 files and a series of 50 files need different
-windows. Filename grouping is intrinsic to how datasets are named
+A sliding-window approach (used in earlier versions) was awkward: a
+series of 5 files and a series of 50 files need different windows.
+Filename grouping is intrinsic to the naming scheme
 (``sample_001.h5``, ``sample_002.h5`` …) and robust to variable series
 lengths.
-
-Series can span dozens or hundreds of files. If a series has only a
-single flagged row that looks like a true outlier, correction is
-high-confidence; if it has many flagged rows, the "median" may not be
-the true value and manual review is recommended.
 
 Auto-skip undersized files
 --------------------------

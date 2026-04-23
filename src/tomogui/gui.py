@@ -604,16 +604,41 @@ class TomoGUI(QWidget):
         batch_ops.addWidget(batch_full_btn)
         batch_ai_btn = QPushButton("Batch AI Reco")
         batch_ai_btn.setStyleSheet("QPushButton { font-size: 10.5pt; font-weight:bold; color: #1a8cff; }")
-        batch_ai_btn.setToolTip("Run AI Reco (try + inference + full) on every selected file, one at a time")
+        batch_ai_btn.setToolTip(
+            "Run selected phases of AI Reco on every checked file. "
+            "Tick the phase checkboxes to the right to pick which run."
+        )
         batch_ai_btn.clicked.connect(self._batch_run_ai_selected)
         batch_ops.addWidget(batch_ai_btn)
-        self.batch_ai_upload_tomolog = QCheckBox("→ TomoLog")
-        self.batch_ai_upload_tomolog.setStyleSheet("QCheckBox { font-size: 10.5pt; color: #1a8cff; }")
-        self.batch_ai_upload_tomolog.setToolTip(
-            "After Phase C (full reconstruction), upload each successful file "
-            "to TomoLog using the current TomoLog panel settings."
+
+        def _mk_phase(label, default, tip):
+            cb = QCheckBox(label)
+            cb.setStyleSheet("QCheckBox { font-size: 10.5pt; color: #1a8cff; }")
+            cb.setChecked(default)
+            cb.setToolTip(tip)
+            batch_ops.addWidget(cb)
+            return cb
+
+        self.batch_ai_phase_try = _mk_phase(
+            "Try", True,
+            "Phase A — run Try reconstruction for every checked file."
         )
-        batch_ops.addWidget(self.batch_ai_upload_tomolog)
+        self.batch_ai_phase_infer = _mk_phase(
+            "Infer", True,
+            "Phase B — run AI inference on each file's try_center TIFFs and "
+            "fill the COR cell."
+        )
+        self.batch_ai_phase_full = _mk_phase(
+            "Full", True,
+            "Phase C — run Full reconstruction for every file that now has a COR."
+        )
+        self.batch_ai_phase_tomolog = _mk_phase(
+            "TomoLog", False,
+            "Phase D — upload each successfully reconstructed file to "
+            "TomoLog using the current TomoLog panel settings."
+        )
+        # Back-compat alias (still read by older code paths / docs).
+        self.batch_ai_upload_tomolog = self.batch_ai_phase_tomolog
         fix_cor_btn = QPushButton("Fix COR Outliers")
         fix_cor_btn.setStyleSheet("QPushButton { font-size: 10.5pt; color: #8e44ad; }")
         fix_cor_btn.setToolTip("Detect outlier COR values among selected files and replace "
@@ -4676,26 +4701,15 @@ class TomoGUI(QWidget):
 
         if modifiers == Qt.ShiftModifier and self.batch_last_clicked_row is not None:
             # Shift-click: check every row between the previously-clicked row
-            # and this one. COR propagation is optional — Batch AI Reco does
-            # not need per-row CORs, so we no longer refuse the range when
-            # the first row is empty.
+            # and this one. No automatic COR propagation — use the
+            # Fix COR Outliers button to fill any missing CORs from series.
             start_row = min(self.batch_last_clicked_row, row)
             end_row = max(self.batch_last_clicked_row, row)
 
-            first_cor = None
-            for file_info in self.batch_file_main_list:
-                if file_info['row'] == start_row:
-                    first_cor = file_info['cor_input'].text().strip()
-                    break
-
-            propagated = 0
             for r in range(start_row, end_row + 1):
                 for file_info in self.batch_file_main_list:
                     if file_info['row'] == r:
                         file_info['checkbox'].setChecked(True)
-                        if first_cor and not file_info['cor_input'].text().strip():
-                            file_info['cor_input'].setText(first_cor)
-                            propagated += 1
                         break
 
             n = end_row - start_row + 1
@@ -4703,11 +4717,6 @@ class TomoGUI(QWidget):
                 f'<span style="color:green;">✅ Selected rows {start_row}–{end_row} '
                 f'({n} files)</span>'
             )
-            if propagated:
-                self.log_output.append(
-                    f'<span style="color:blue;">📍 Propagated COR {first_cor} to '
-                    f'{propagated} row(s) that had none</span>'
-                )
 
         # Update last clicked row
         self.batch_last_clicked_row = row
@@ -5428,24 +5437,70 @@ class TomoGUI(QWidget):
                 fi['cor_input'].setText(new_txt)
                 changes.append((fi, old_txt, replacement, prefix, reason))
 
+        # 3) Series-mean fallback for any still-empty selected row.
+        # Looks at the ENTIRE table (not just selected) so a donor COR in
+        # the same series is used even if its file is unchecked. If more
+        # than one donor exists, uses the average.
+        already_filled_paths = {fi['path'] for fi, _, _, _, _ in changes}
+        still_skipped = []
+        filled_from_series = []   # (fi, series, value, n_donors)
+
+        # Build series_key → list of CORs across the whole table
+        table_series_cors = {}
+        for fi_all in self.batch_file_main_list:
+            txt_all = (fi_all['cor_input'].text().strip()
+                       if fi_all.get('cor_input') else "")
+            try:
+                v = float(txt_all)
+            except (ValueError, TypeError):
+                continue
+            key_all = _series_key(fi_all['filename'])[0]
+            table_series_cors.setdefault(key_all, []).append(v)
+
+        for fi, series, reason in skipped:
+            if fi['path'] in already_filled_paths:
+                continue
+            current_txt = (fi['cor_input'].text().strip()
+                           if fi.get('cor_input') else "")
+            if current_txt:
+                still_skipped.append((fi, series, reason))
+                continue
+            donors = table_series_cors.get(series, [])
+            if not donors:
+                still_skipped.append((fi, series,
+                                      "no COR donor in series (whole table)"))
+                continue
+            mean_val = sum(donors) / len(donors)
+            fi['cor_input'].setText(f"{mean_val:.2f}")
+            filled_from_series.append((fi, series, mean_val, len(donors)))
+            changes.append(
+                (fi, "", mean_val, series,
+                 f"series-mean of {len(donors)} donor(s)")
+            )
+
+        skipped = still_skipped
+
         if not changes and not skipped:
             self.log_output.append(
-                '<span style="color:green;">✅ No COR outliers detected in any '
-                'series.</span>'
+                '<span style="color:green;">✅ No COR outliers detected and '
+                'no missing CORs to fill.</span>'
             )
             return
 
-        # 3) Persist to rot_cen.json
+        # 4) Persist to rot_cen.json
         data_folder = self.data_path.text().strip()
         for fi, _, newv, _, _ in changes:
             self.cor_data[fi['path']] = f"{newv:.2f}"
         if data_folder:
             self._save_cor_data(data_folder, self.cor_data)
 
-        # 4) Log
+        # 5) Log
+        n_fill = len(filled_from_series)
+        n_outlier = len(changes) - n_fill
         self.log_output.append(
-            f'<span style="color:#8e44ad;">🧹 COR outliers (max Δ = {max_thresh:g} px): '
-            f'{len(changes)} replaced, {len(skipped)} left unchanged across '
+            f'<span style="color:#8e44ad;">🧹 Fix COR Outliers (max Δ = {max_thresh:g} px): '
+            f'{n_outlier} outlier(s) replaced, {n_fill} missing filled from '
+            f'series mean, {len(skipped)} left unchanged across '
             f'{len(series_groups)} series.</span>'
         )
         for fi, old, newv, series, reason in changes:
@@ -5496,11 +5551,25 @@ class TomoGUI(QWidget):
             if not row_ok and not top_bar_ok and self.cor_method_box.currentText() != "auto":
                 missing_seed.append(fi['filename'])
 
-        if missing_seed:
+        # Read phase selection up front so we can validate seeds only when
+        # the seed-consuming phase (Try) is actually going to run.
+        run_try = self.batch_ai_phase_try.isChecked()
+        run_infer = self.batch_ai_phase_infer.isChecked()
+        run_full = self.batch_ai_phase_full.isChecked()
+        run_tomolog = self.batch_ai_phase_tomolog.isChecked()
+        if not any((run_try, run_infer, run_full, run_tomolog)):
+            QMessageBox.warning(
+                self, "No phase selected",
+                "Tick at least one of Try / Infer / Full / TomoLog next to "
+                "the Batch AI Reco button."
+            )
+            return
+
+        if run_try and missing_seed:
             self.log_output.append(
-                '<span style="color:red;">❌ AI Reco needs a starting COR for every '
-                'selected file. The following have neither a row COR nor a valid '
-                'top-bar fallback:</span>'
+                '<span style="color:red;">❌ AI Reco Try needs a starting COR for '
+                'every selected file. The following have neither a row COR nor a '
+                'valid top-bar fallback:</span>'
             )
             for fn in missing_seed[:10]:
                 self.log_output.append(f'   {fn}')
@@ -5519,9 +5588,13 @@ class TomoGUI(QWidget):
             f"({top_bar_txt or 'auto'})."
         )
 
+        phases_str = " + ".join(
+            p for p, on in [("Try", run_try), ("Infer", run_infer),
+                            ("Full", run_full), ("TomoLog", run_tomolog)] if on
+        )
         reply = QMessageBox.question(
             self, 'Confirm Batch AI Reco',
-            f'Run AI Reco (try + inference + full) sequentially on '
+            f'Run phases: <b>{phases_str}</b> on '
             f'{len(selected_files)} selected files?\n'
             f'Seed policy per file: row COR if present, else top-bar.\n{seed_summary}',
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No
@@ -5549,73 +5622,101 @@ class TomoGUI(QWidget):
                 fi['cor_input'].setText(top_bar_txt)
 
         self._batch_active = True
+        data_folder = self.data_path.text().strip()
+        failed_inf = []      # set by Phase B (or left empty if skipped)
         try:
             # ── Phase A: multi-GPU try reconstructions ───────────────
-            self.log_output.append(
-                '<span style="color:#1a8cff;">── Phase A: TRY reconstructions '
-                '(parallel across GPUs)…</span>'
-            )
-            QApplication.processEvents()
-            self._run_batch_with_queue(selected_files, recon_type='try',
-                                       num_gpus=num_gpus, machine=machine)
+            if run_try:
+                self.log_output.append(
+                    '<span style="color:#1a8cff;">── Phase A: TRY reconstructions '
+                    '(parallel across GPUs)…</span>'
+                )
+                QApplication.processEvents()
+                self._run_batch_with_queue(selected_files, recon_type='try',
+                                           num_gpus=num_gpus, machine=machine)
+            else:
+                self.log_output.append(
+                    '<span style="color:#888;">── Phase A (Try) skipped — '
+                    'using existing try_center TIFFs.</span>'
+                )
 
-            # ── Phase B: DINOv2 inference (one file per GPU slot, via same queue) ──
-            self.log_output.append(
-                f'<span style="color:#1a8cff;">── Phase B: DINOv2 inference — '
-                f'{len(selected_files)} file(s), {num_gpus} GPU slot(s)…</span>'
-            )
-            QApplication.processEvents()
-            data_folder = self.data_path.text().strip()
-            self._run_batch_with_queue(selected_files, recon_type='infer',
-                                       num_gpus=num_gpus, machine=machine)
+            # ── Phase B: DINOv2 inference (one file per GPU slot) ────
+            if run_infer:
+                self.log_output.append(
+                    f'<span style="color:#1a8cff;">── Phase B: DINOv2 inference — '
+                    f'{len(selected_files)} file(s), {num_gpus} GPU slot(s)…</span>'
+                )
+                QApplication.processEvents()
+                self._run_batch_with_queue(selected_files, recon_type='infer',
+                                           num_gpus=num_gpus, machine=machine)
 
-            # Collect results — read each file's center_of_rotation.txt
-            inferred = 0
-            failed_inf = []
-            for fi in selected_files:
-                proj_file = fi.get('path') or fi.get('file')
-                if not proj_file:
-                    continue
-                proj_name = os.path.splitext(os.path.basename(proj_file))[0]
-                try_dir = os.path.join(f"{data_folder}_rec", "try_center", proj_name)
-                cor_txt = os.path.join(try_dir, 'center_of_rotation.txt')
-                ai_cor = None
-                if os.path.exists(cor_txt):
-                    try:
-                        with open(cor_txt) as f:
-                            lines = [ln.strip() for ln in f if ln.strip()]
-                        if lines:
-                            ai_cor = lines[-1]
-                            float(ai_cor)  # validate
-                    except Exception:
-                        ai_cor = None
-                if ai_cor is not None:
-                    self.cor_data[proj_file] = ai_cor
-                    inferred += 1
-                else:
-                    failed_inf.append(os.path.basename(proj_file))
-            if data_folder:
-                self._save_cor_data(data_folder, self.cor_data)
-            self.log_output.append(
-                f'<span style="color:#1a8cff;">   Phase B done: {inferred} succeeded, '
-                f'{len(failed_inf)} failed.</span>'
-            )
+                # Collect results — read each file's center_of_rotation.txt
+                inferred = 0
+                for fi in selected_files:
+                    proj_file = fi.get('path') or fi.get('file')
+                    if not proj_file:
+                        continue
+                    proj_name = os.path.splitext(os.path.basename(proj_file))[0]
+                    try_dir = os.path.join(f"{data_folder}_rec", "try_center", proj_name)
+                    cor_txt = os.path.join(try_dir, 'center_of_rotation.txt')
+                    ai_cor = None
+                    if os.path.exists(cor_txt):
+                        try:
+                            with open(cor_txt) as f:
+                                lines = [ln.strip() for ln in f if ln.strip()]
+                            if lines:
+                                ai_cor = lines[-1]
+                                float(ai_cor)  # validate
+                        except Exception:
+                            ai_cor = None
+                    if ai_cor is not None:
+                        self.cor_data[proj_file] = ai_cor
+                        inferred += 1
+                        # Belt-and-braces: make sure the COR cell in the table
+                        # reflects the value just read from disk, in case
+                        # neither the stdout streamer nor the completion
+                        # handler caught it.
+                        w = fi.get('cor_input')
+                        if w is not None:
+                            try:
+                                w.setText(f"{float(ai_cor):.2f}")
+                            except (ValueError, RuntimeError):
+                                pass
+                    else:
+                        failed_inf.append(os.path.basename(proj_file))
+                if data_folder:
+                    self._save_cor_data(data_folder, self.cor_data)
+                self.log_output.append(
+                    f'<span style="color:#1a8cff;">   Phase B done: {inferred} succeeded, '
+                    f'{len(failed_inf)} failed.</span>'
+                )
+            else:
+                self.log_output.append(
+                    '<span style="color:#888;">── Phase B (Infer) skipped — '
+                    'Full will use CORs already in the table.</span>'
+                )
 
             # ── Phase C: multi-GPU full reconstructions ──────────────
-            self.log_output.append(
-                '<span style="color:#1a8cff;">── Phase C: FULL reconstructions '
-                '(parallel across GPUs, using AI-predicted CORs)…</span>'
-            )
-            QApplication.processEvents()
-            # Only run full on files where inference actually produced a COR
-            good_for_full = [fi for fi in selected_files
-                             if os.path.basename(fi.get('path') or '')
-                             not in set(failed_inf)]
-            self._run_batch_with_queue(good_for_full, recon_type='full',
-                                       num_gpus=num_gpus, machine=machine)
+            if run_full:
+                self.log_output.append(
+                    '<span style="color:#1a8cff;">── Phase C: FULL reconstructions '
+                    '(parallel across GPUs)…</span>'
+                )
+                QApplication.processEvents()
+                # Only run full on files where inference actually produced a COR
+                # (or all files if Phase B was skipped — trust the existing CORs).
+                good_for_full = [fi for fi in selected_files
+                                 if os.path.basename(fi.get('path') or '')
+                                 not in set(failed_inf)]
+                self._run_batch_with_queue(good_for_full, recon_type='full',
+                                           num_gpus=num_gpus, machine=machine)
+            else:
+                self.log_output.append(
+                    '<span style="color:#888;">── Phase C (Full) skipped.</span>'
+                )
 
             # ── Phase D (optional): upload reconstructions to TomoLog ──
-            if self.batch_ai_upload_tomolog.isChecked():
+            if run_tomolog:
                 self.log_output.append(
                     '<span style="color:#1a8cff;">── Phase D: TomoLog upload '
                     '(sequential, one file at a time)…</span>'

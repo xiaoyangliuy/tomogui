@@ -11,15 +11,15 @@ Packages
    ``QWidget`` that assembles every tab.
 
 ``tomogui._infer_worker``
-   Standalone CLI worker used by Batch AI Reco Phase B. Takes a
-   data folder, model path, and list of files; runs DINOv2 inference on
-   the try_center TIFFs of each file and writes
-   ``center_of_rotation.txt``.
+   Standalone CLI worker. Takes a data folder, model path, and **one
+   file** per invocation (it also accepts a list of files, unused by
+   the current GUI); runs DINOv2 inference on that file's try_center
+   TIFFs and writes ``center_of_rotation.txt``.
 
 ``tomogui._tomocor_infer``
    Bundled copy of the tomocor inference code (``inference.py``,
-   ``model_archs.py``, ``_utils.py``) so TomoGUI can run AI Reco without
-   requiring ``tomocor`` to be installed separately.
+   ``model_archs.py``, ``_utils.py``) so TomoGUI can run AI Reco
+   without requiring ``tomocor`` separately.
 
 Layering
 --------
@@ -45,38 +45,49 @@ Layering
 Key subsystems
 --------------
 
-Batch queue
-~~~~~~~~~~~
+Unified batch queue
+~~~~~~~~~~~~~~~~~~~
 
-A multi-GPU job queue dispatches TomoCuPy subprocesses with
-``CUDA_VISIBLE_DEVICES`` set per worker. Each queued job carries the per-row
-COR (fallback to top-bar), parameters, and output paths. Polling uses
-``processEvents`` rather than ``QThread`` blocking waits to keep the GUI
-responsive.
+``_run_batch_with_queue(files, recon_type, num_gpus, machine)`` is the
+single entry point for all parallel batch dispatch. ``recon_type`` is
+``'try'``, ``'full'``, or ``'infer'``; the only per-type variation is
+inside ``_start_batch_job_async``, which builds the appropriate
+subprocess command (``tomocupy …`` vs
+``python -m tomogui._infer_worker …``). Polling uses
+``QApplication.processEvents()`` rather than blocking ``QThread``
+waits so the GUI stays responsive.
 
-AI Reco 3-phase pipeline
-~~~~~~~~~~~~~~~~~~~~~~~~
+AI Reco pipeline
+~~~~~~~~~~~~~~~~
 
-``_batch_run_ai_selected`` orchestrates:
+``_batch_run_ai_selected`` orchestrates four phases, each a call to
+``_run_batch_with_queue`` (Phase D is a sequential loop instead):
 
-- **Phase A** — reuse the Batch queue for ``try``.
-- **Phase B** — split files into *N* chunks; spawn one
-  ``_infer_worker`` subprocess per GPU via ``subprocess.Popen``; drain
-  each worker's stdout in a Python thread into a shared ``queue.Queue``;
-  the main Qt loop consumes events from that queue, parses
-  ``[infer-worker] OK|SKIP|FAIL`` lines, and updates per-row status and
-  the progress bar.
-- **Phase C** — reuse the Batch queue for ``full``.
+- **A** — ``try`` reconstructions.
+- **B** — ``infer`` (one file per GPU slot). ``_on_infer_output`` parses
+  ``[infer-worker] OK <path> => <cor>`` lines and updates the row's
+  COR input live. On clean exit the completion handler in
+  ``_run_batch_with_queue`` also reads ``center_of_rotation.txt`` as a
+  fallback.
+- **C** — ``full`` reconstructions on files whose Phase B produced a
+  COR.
+- **D** *(optional, gated by the ``batch_ai_upload_tomolog`` checkbox)*
+  — sequential ``_run_tomolog_for_file`` calls for every file whose
+  Full completed successfully.
 
 Fix COR Outliers
 ~~~~~~~~~~~~~~~~
 
-Pure-Python routine in ``gui.py`` (``_fix_cor_outliers``):
+Pure-Python routine in ``gui.py`` (``_fix_cor_outliers``). Two passes
+on one click:
 
-- Group rows by filename series (``^(.*?)[._-]*(\d+)$``).
-- Compute series median and MAD.
-- Flag deviations greater than ``min(max_delta, max(10, 5·MAD))``.
-- Prompt for confirmation and replace in-place.
+1. Group selected rows by filename series
+   (``^(.*?)[._-]*(\d+)$``). Within each series, compute median and
+   MAD; flag deviations greater than
+   ``min(max_delta, max(10, 5·MAD))``; replace flagged values with the
+   average of the two nearest non-flagged neighbours by index.
+2. Fill any still-empty selected rows with the mean of CORs in their
+   series across the **whole table** (donor rows can be unchecked).
 
 Per-dataset parameter persistence
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -86,5 +97,4 @@ next to the projection HDF5 file. Selecting the file reloads that
 sidecar; ``Apply parameters to selected`` copies the sidecar to other
 rows.
 
-See :doc:`api_reference` for a generated API overview (or use
-``pydoc tomogui`` from a shell).
+See :doc:`api_reference` for a curated API overview.

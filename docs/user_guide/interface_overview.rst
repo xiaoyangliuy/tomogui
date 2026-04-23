@@ -51,11 +51,13 @@ Top tab bar
 
 The tab bar switches between:
 
-- **Main** — single-file workflow (Try, Full, AI Reco, TomoLog)
-- **Batch** — multi-file workflow (checkboxes, series grouping, Fix COR
-  Outliers, Batch AI Reco)
-- **HDF5 Viewer** — inspect HDF5 structure / previews
-- **Advanced Config** — remote hosts, number of GPUs, AI model path, etc.
+- **Main** — single-file and batch workflow in one view (Try, Full, AI
+  Reco, TomoLog controls plus the file/batch table with Fix COR
+  Outliers and Delete Selected)
+- **Reconstruction / Hardening / Phase / Rings / Geometry / Data /
+  Performance** — per-category TomoCuPy parameter tabs
+- **Advanced Config** — remote host, GPU count, AI model path, extra
+  flags
 
 Left Panel
 ----------
@@ -127,35 +129,38 @@ Cross-cutting configuration:
 
 - **Remote host** — SSH user@host for running reconstruction on a remote
   GPU node
-- **Number of GPUs** — used by Batch AI Reco to split Phase B inference
+- **Number of GPUs** — parallelism for every batch phase (one file per
+  GPU slot, next dispatched on slot free)
 - **AI model path** — absolute path to the ``.pth`` checkpoint
 - **Extra flags** — free-form extra command-line flags appended to
   ``tomocupy`` invocations
 
-Batch Tab
-^^^^^^^^^
+Batch table (on the Main tab)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 See :doc:`batch_processing` for the full batch workflow. Key controls:
 
 .. figure:: /_static/screenshots/batch_tab_overview.png
-   :alt: Batch tab
+   :alt: Batch file table
    :align: center
 
 - file table with per-row checkbox, COR, status, and series tint
-- **Batch Try**, **Batch Full**, **Batch AI Reco**
-- **Fix COR Outliers** with *Max COR delta* (default 50 px)
+- **Batch Try**, **Batch Full**, **Batch AI Reco**, **→ TomoLog**
+  (optional Phase D upload)
+- **Fix COR Outliers** (also fills missing CORs from series mean),
+  with *Max COR delta* (default 50 px)
 - **Delete Selected** (with confirmation)
 - Shift-click range selection
 
-HDF5 Viewer Tab
-^^^^^^^^^^^^^^^
+HDF5 Viewer
+^^^^^^^^^^^
 
 .. figure:: /_static/screenshots/hdf5_viewer_overview.png
    :alt: HDF5 Viewer
    :align: center
 
-Browse the HDF5 tree, view dataset metadata, and preview 2D slices without
-leaving TomoGUI.
+Right-click a row → *View Data* to open the HDF5 viewer on that file —
+browse the group tree, scrub through projections, check metadata.
 
 Right Panel
 -----------
@@ -183,5 +188,6 @@ Structured log with colour-coded statuses:
 - ⚠ warning (amber)
 - 🚀 job start
 
-During Batch AI Phase B, per-file lines such as
-``[infer-worker] OK /data/.../sample_007.h5 => 1024.3`` stream live.
+During Batch AI Phase B, per-file lines like
+``[infer-worker] OK /data/.../sample_007.h5 => 1024.3`` stream live and
+the corresponding COR cell updates in real time.

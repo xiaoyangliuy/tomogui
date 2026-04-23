@@ -12,9 +12,9 @@ The Batch tab lets you:
 
 - process dozens to thousands of datasets with one click
 - run reconstruction on local or remote GPUs
-- run **Batch AI Reco** with a 3-phase multi-GPU pipeline
-- detect and correct bad CORs via **Fix COR Outliers** with filename-based
-  series grouping
+- run **Batch AI Reco** (try → inference → full, optional TomoLog upload)
+  driven by a shared GPU queue
+- detect outliers AND fill missing CORs with **Fix COR Outliers**
 - auto-skip undersized files within a series
 - monitor progress and per-file status in real time
 
@@ -84,14 +84,21 @@ noticeably smaller than its peers is flagged *skipped* automatically.
 This catches aborted acquisitions and avoids failing the whole batch on a
 single bad file.
 
-Fix COR Outliers
-~~~~~~~~~~~~~~~~
+Fix COR Outliers (also fills missing CORs)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-See :doc:`ai_reco` for the full algorithm. Summary: within each series,
-compute the median and MAD, flag any COR that differs by more than
-``min(max_delta, max(10, 5·MAD))``, and replace it with the series
-median. The ``max_delta`` is exposed as a *Max COR delta* spinbox on the
-Batch tab (default 50 px).
+One click does two things:
+
+1. **Outlier replacement** — within each series, flag any COR that
+   differs from the series median by more than
+   ``min(max_delta, max(10, 5·MAD))`` and replace it with the average
+   of its two nearest in-series neighbours. ``max_delta`` is the
+   *Max COR delta* spinbox (default 50 px).
+2. **Missing-COR fill** — any selected row still empty is filled with
+   the mean of existing CORs in its series across the **whole table**
+   (donors can be checked or unchecked, anywhere in the list).
+
+See :doc:`ai_reco` for the full algorithm.
 
 .. figure:: /_static/screenshots/batch_tab_fix_cor_outliers.png
    :alt: Fix COR Outliers confirmation
@@ -113,9 +120,10 @@ Remote / multi-GPU
 ------------------
 
 The Advanced Config tab sets the remote host and the **Number of GPUs**.
-*Batch Try* and *Batch Full* split the job queue across GPUs (one
-TomoCuPy process per GPU), and *Batch AI Reco* uses the same GPU count
-for Phase B inference.
+*Batch Try*, *Batch Full*, and every phase of *Batch AI Reco* all use
+the same shared queue: one reconstruction / inference process per GPU
+slot at a time, pinned via ``CUDA_VISIBLE_DEVICES``, next file
+dispatched the moment a slot frees up.
 
 See :doc:`../advanced/gpu_management` and :doc:`../advanced/ssh_setup`
 for configuration details.

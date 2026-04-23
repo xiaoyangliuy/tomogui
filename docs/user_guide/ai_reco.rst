@@ -3,9 +3,9 @@ AI Reconstruction
 
 TomoGUI ships a DINOv2-based automatic center-of-rotation (COR) finder,
 available both as a single-file action on the Main tab and as a batch
-pipeline on the Batch tab. Under the hood, the single-file and batch
-variants share the same inference code (``tomogui._tomocor_infer``); the
-batch variant additionally parallelises across GPUs.
+pipeline on the Batch tab. The same inference code
+(``tomogui._tomocor_infer``) is used in both cases; the batch variant
+parallelises across GPUs.
 
 How it works
 ------------
@@ -13,12 +13,12 @@ How it works
 1. A Try reconstruction produces a grid of slices at different candidate
    COR values, saved to
    ``<data_folder>_rec/try_center/<dataset>/center*.tiff``.
-2. The AI Reco inference pipeline loads those TIFFs, runs the DINOv2-based
+2. The AI Reco inference step loads those TIFFs, runs the DINOv2-based
    model, and writes the chosen COR to
    ``<data_folder>_rec/try_center/<dataset>/center_of_rotation.txt``.
-3. TomoGUI reads ``center_of_rotation.txt`` and updates the per-file COR in
-   the GUI / Batch table. You can then run Full reconstruction with the
-   chosen COR.
+3. TomoGUI reads ``center_of_rotation.txt`` and updates the per-file COR
+   in the GUI / Batch table. You can then run Full reconstruction with
+   the chosen COR.
 
 Single-file AI Reco
 -------------------
@@ -27,47 +27,71 @@ On the Main tab:
 
 1. Load a dataset and run **Try** (or use an already-computed try_center).
 2. Click **AI Reco**.
-3. Confirm the model path, window size (518 by default), number of
-   windows (3), downsample factor (2), and GPU.
-4. The chosen COR is written back to the COR input when inference
+3. The chosen COR is written back to the COR input when inference
    completes.
 
-Batch AI Reco (multi-GPU)
--------------------------
+Batch AI Reco
+-------------
 
-The Batch tab's **AI Reco** button runs a 3-phase pipeline across all
-checked rows:
+The Batch tab's **AI Reco** button runs the pipeline across every
+checked row. All four phases share the same GPU queue
+(``_run_batch_with_queue``), so each GPU processes one file at a time
+and the next file is dispatched the moment a slot frees up.
+
+Four checkboxes next to the *Batch AI Reco* button select which phases
+actually run:
+
+- **Try** (default on) — Phase A
+- **Infer** (default on) — Phase B
+- **Full** (default on) — Phase C
+- **TomoLog** (default off) — Phase D
+
+Any combination is valid. The confirmation dialog lists the selected
+phases before the run starts. Unticking **Infer** means Phase C (Full)
+uses whatever CORs are currently in the table (from a previous AI run
+or set manually). Unticking **Try** assumes try_center TIFFs already
+exist for every file.
 
 **Phase A — Try**
-   Runs a try reconstruction for each file, sequentially or with the
-   existing Batch queue, producing the try-center TIFFs.
+   Runs a try reconstruction for each file through the standard batch
+   queue, producing the try-center TIFFs.
 
 .. figure:: /_static/screenshots/batch_ai_phase_a.png
    :alt: Batch AI Phase A in progress
    :align: center
 
-**Phase B — Inference (parallel across GPUs)**
-   The file list is split into N chunks (N = *Number of GPUs* in Advanced
-   Config). TomoGUI spawns one ``python -m tomogui._infer_worker``
-   subprocess per chunk, pinning each worker to a single GPU via
-   ``CUDA_VISIBLE_DEVICES``. Workers stream one line per file
-   (``[infer-worker] OK <file> => <cor>`` or ``SKIP``/``FAIL``) and the
-   GUI updates each row's status and the progress bar in real time.
+**Phase B — Inference**
+   One file per GPU slot. TomoGUI spawns a
+   ``python -m tomogui._infer_worker`` subprocess per file via the same
+   queue used for Phase A and C, pinned to one GPU via
+   ``CUDA_VISIBLE_DEVICES``. Each worker streams a line like
+
+   ::
+
+      [infer-worker] OK /data/.../sample_0007.h5 => 1024.3
+
+   and the GUI updates that row's COR and status in real time. A single
+   hung file only blocks its own GPU slot — the queue keeps feeding the
+   other GPUs.
 
 .. figure:: /_static/screenshots/batch_ai_phase_b.png
-   :alt: Batch AI Phase B with per-file streaming status
+   :alt: Batch AI Phase B
    :align: center
 
 **Phase C — Full**
-   With per-file CORs now populated, the standard Batch queue runs Full
-   reconstruction for all files.
+   Files that produced a COR in Phase B are dispatched through the same
+   queue for Full reconstruction.
 
 .. figure:: /_static/screenshots/batch_ai_phase_c.png
    :alt: Batch AI Phase C
    :align: center
 
-At the end, TomoGUI displays a summary dialog listing successful rows, any
-skipped files (e.g. missing try TIFFs), and any failures.
+**Phase D — TomoLog upload (optional)**
+   Tick the **TomoLog** phase checkbox before starting. After Phase C,
+   every file whose Full succeeded is uploaded to TomoLog using the
+   settings in the TomoLog panel on the right side. Uploads run one at
+   a time (network-bound, no need to parallelise). Row status shows
+   *Uploading…* → *Uploaded* or *Upload failed*.
 
 .. figure:: /_static/screenshots/batch_ai_summary.png
    :alt: Batch AI Reco summary
@@ -77,8 +101,8 @@ Fix COR Outliers
 ----------------
 
 Runs that use AI Reco (or a mix of manual + AI) occasionally produce a
-spurious COR for a single file. The Batch tab's **Fix COR Outliers** button
-corrects these post-hoc.
+spurious COR for a single file — or leave some files with no COR at
+all. The Batch tab's **Fix COR Outliers** button handles both cases.
 
 .. figure:: /_static/screenshots/batch_tab_fix_cor_settings.png
    :alt: Max COR delta spinbox and Fix COR Outliers button
@@ -87,27 +111,25 @@ corrects these post-hoc.
 Algorithm
 ~~~~~~~~~
 
-1. Group rows by **filename series**. Filenames are normalised by
-   stripping trailing separators and a numeric index
-   (``^(.*?)[._-]*(\d+)$``), so ``sample_001.h5``, ``sample_002.h5``, …
-   all belong to the ``sample`` series, independent of how many files the
-   series contains.
-2. Within each series, compute the **median** COR and the **median
-   absolute deviation (MAD)**.
-3. Flag any row whose COR deviates from the series median by more than
-   ``min(max_delta, max(10, 5·MAD))`` pixels, where ``max_delta`` is the
-   *Max COR delta* spinbox (default **50 px**).
-4. Replace flagged CORs with the series median.
+Group rows by **filename series** (``^(.*?)[._-]*(\d+)$`` on the
+filename stem — so ``sample_001.h5``, ``sample_002.h5``, … all share
+the ``sample`` series).
 
-This captures both the "hard" physical constraint ("within a series, COR
-cannot drift by more than 50 px") and the MAD-based statistical one
-("5 σ-equivalent from the series median").
+For each series, two passes:
 
-Applying
-~~~~~~~~
+1. **Outlier replacement** — compute the series median and MAD. Flag
+   any COR deviating by more than
+   ``min(max_delta, max(10, 5·MAD))``. Replace each flagged COR with
+   the average of its two nearest non-flagged neighbours by index in
+   the same series. ``max_delta`` is the *Max COR delta* spinbox
+   (default **50 px**).
+2. **Missing-COR fill** — any selected row still empty is filled with
+   the **mean** of all CORs in its series across the **whole table**
+   (not just the selected rows). A donor file can be anywhere in the
+   list, checked or not. If the series has 0 donors, the row is left
+   empty and reported.
 
-Click **Fix COR Outliers**. A confirmation dialog lists each flagged row
-with its current and proposed COR. Accept to apply.
+Both passes run in the same click.
 
 .. figure:: /_static/screenshots/batch_tab_fix_cor_outliers.png
    :alt: Fix COR Outliers confirmation dialog
@@ -116,11 +138,8 @@ with its current and proposed COR. Accept to apply.
 Series tinting and auto-skip
 ----------------------------
 
-Two related features help when operating on series:
-
 **Series tinting** — each filename series gets its own subtle row
-background tint in the Batch table, so you can visually confirm which
-files are grouped together.
+background tint in the Batch table.
 
 .. figure:: /_static/screenshots/batch_tab_series_tint.png
    :alt: Batch table with series tinting
@@ -128,17 +147,15 @@ files are grouped together.
 
 **Auto-skip undersized files** — within a series, any file whose HDF5
 ``/exchange/data`` array is noticeably smaller than its peers is marked
-*skipped* automatically. This typically catches acquisitions that were
-aborted partway through.
+*skipped* automatically (aborted acquisition).
 
 TomoLog auto-contrast
 ---------------------
 
-The TomoLog dialog's Min / Max fields can be left blank: when either is
-blank, TomoGUI computes a **5 – 95 % percentile** contrast per file
-before handing it to TomoLog. This keeps multi-file PDF reports readable
-when datasets have very different absolute intensity ranges.
+Leaving Min / Max blank in the TomoLog panel triggers a per-file
+**5 – 95 % percentile** auto-contrast. Useful when datasets have very
+different absolute intensity ranges.
 
 .. figure:: /_static/screenshots/tomolog_dialog.png
-   :alt: Tomolog dialog with blank Min/Max
+   :alt: Tomolog panel
    :align: center
