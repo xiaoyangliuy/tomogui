@@ -5742,18 +5742,11 @@ class TomoGUI(QWidget):
                         except Exception:
                             ai_cor = None
                     if ai_cor is not None:
-                        self.cor_data[proj_file] = ai_cor
                         inferred += 1
-                        # Belt-and-braces: make sure the COR cell in the table
-                        # reflects the value just read from disk, in case
-                        # neither the stdout streamer nor the completion
-                        # handler caught it.
-                        w = fi.get('cor_input')
-                        if w is not None:
-                            try:
-                                w.setText(f"{float(ai_cor):.2f}")
-                            except (ValueError, RuntimeError):
-                                pass
+                        # Belt-and-braces: reapply via the robust helper so
+                        # the cell definitely reflects what's on disk even if
+                        # the stored widget reference is stale.
+                        self._set_cor_cell(fi, ai_cor)
                     else:
                         failed_inf.append(os.path.basename(proj_file))
                 if data_folder:
@@ -6089,14 +6082,11 @@ class TomoGUI(QWidget):
                                             _lines = [ln.strip() for ln in _f if ln.strip()]
                                         if _lines:
                                             cor_val = float(_lines[-1].split()[-1])
-                                            w = file_info.get('cor_input')
-                                            if w is not None:
-                                                w.setText(f"{cor_val:.2f}")
-                                            self.cor_data[file_info['path']] = str(cor_val)
+                                            self._set_cor_cell(file_info, cor_val)
                                     else:
                                         status_text = "Infer no-output"
                                         status_color = "#c0392b"
-                                except Exception as _e:
+                                except Exception:
                                     status_text = "Infer parse-error"
                                     status_color = "#c0392b"
                             else:  # full
@@ -6462,6 +6452,45 @@ class TomoGUI(QWidget):
                         f'<span style="color:{color};">{prefix} [{basename}] {line}</span>'
                     )
 
+    def _set_cor_cell(self, file_info, cor_val):
+        """Robustly update a batch-table row's COR cell. Tries the stored
+        ``file_info['cor_input']`` widget first, then falls back to a live
+        ``cellWidget(row, 2)`` lookup in case the stored reference is stale
+        after a table rebuild. Also updates ``self.cor_data`` and nudges Qt
+        to repaint."""
+        try:
+            txt = f"{float(cor_val):.2f}"
+        except (ValueError, TypeError):
+            return
+        hit = False
+        w = file_info.get('cor_input')
+        if w is not None:
+            try:
+                w.setText(txt)
+                hit = True
+            except RuntimeError:
+                pass
+        # Always also try the live cellWidget — a stale file_info ref is
+        # cheap to defend against.
+        try:
+            r = self._find_row_by_filename(
+                os.path.basename(file_info.get('filename', '')))
+        except Exception:
+            r = None
+        if r is not None:
+            live_w = self.batch_file_main_table.cellWidget(r, 2)
+            if live_w is not None and live_w is not w:
+                try:
+                    live_w.setText(txt)
+                    hit = True
+                except RuntimeError:
+                    pass
+        if hit:
+            path = file_info.get('path')
+            if path:
+                self.cor_data[path] = txt
+            QApplication.processEvents()
+
     def _on_infer_output(self, process, filename, file_info):
         """Stream inference worker stdout. Parse `[infer-worker] OK <path> => <cor>`
         lines to update the row's COR field as soon as the worker emits it."""
@@ -6481,12 +6510,7 @@ class TomoGUI(QWidget):
                     cor_val = float(line.rsplit("=>", 1)[-1].strip())
                 except Exception:
                     continue
-                w = file_info.get('cor_input')
-                if w is not None:
-                    try:
-                        w.setText(f"{cor_val:.2f}")
-                    except RuntimeError:
-                        pass
+                self._set_cor_cell(file_info, cor_val)
 
 
     # ===== THEME METHODS =====
