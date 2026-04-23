@@ -5338,10 +5338,9 @@ class TomoGUI(QWidget):
             except (ValueError, TypeError):
                 cor = None
             selected.append([file_info, cor])
-        if len(selected) < 3:
+        if not selected:
             self.log_output.append(
-                '<span style="color:orange;">⚠️ Need at least 3 selected files '
-                'to detect outliers.</span>'
+                '<span style="color:orange;">⚠️ No files selected.</span>'
             )
             return
 
@@ -5437,15 +5436,13 @@ class TomoGUI(QWidget):
                 fi['cor_input'].setText(new_txt)
                 changes.append((fi, old_txt, replacement, prefix, reason))
 
-        # 3) Series-mean fallback for any still-empty selected row.
-        # Looks at the ENTIRE table (not just selected) so a donor COR in
-        # the same series is used even if its file is unchecked. If more
-        # than one donor exists, uses the average.
-        already_filled_paths = {fi['path'] for fi, _, _, _, _ in changes}
-        still_skipped = []
+        # 3) Missing-COR fill. Independent of the outlier loop above.
+        # For every selected row still without a valid COR, fill it with the
+        # MEAN of CORs in the same series across the WHOLE table (donors can
+        # be checked or unchecked, anywhere in the list).
         filled_from_series = []   # (fi, series, value, n_donors)
 
-        # Build series_key → list of CORs across the whole table
+        # Build series_key → list of numeric CORs across the whole table.
         table_series_cors = {}
         for fi_all in self.batch_file_main_list:
             txt_all = (fi_all['cor_input'].text().strip()
@@ -5457,28 +5454,33 @@ class TomoGUI(QWidget):
             key_all = _series_key(fi_all['filename'])[0]
             table_series_cors.setdefault(key_all, []).append(v)
 
-        for fi, series, reason in skipped:
-            if fi['path'] in already_filled_paths:
-                continue
-            current_txt = (fi['cor_input'].text().strip()
-                           if fi.get('cor_input') else "")
+        # Drop any skipped-entry whose reason was "no COR" — it'll be replaced
+        # by a fresh verdict from this pass (either filled or truly no donor).
+        _missing_reasons = ("series has <2 numeric CORs",
+                            "only left neighbour known",
+                            "only right neighbour known",
+                            "neighbours")  # prefix-match for 'neighbours ... differ'
+        skipped = [s for s in skipped
+                   if not any(s[2].startswith(pfx) for pfx in _missing_reasons)]
+
+        for file_info, _ in selected:
+            current_txt = (file_info['cor_input'].text().strip()
+                           if file_info.get('cor_input') else "")
             if current_txt:
-                still_skipped.append((fi, series, reason))
-                continue
+                continue   # already has a COR (original or freshly filled)
+            series = _series_key(file_info['filename'])[0]
             donors = table_series_cors.get(series, [])
             if not donors:
-                still_skipped.append((fi, series,
-                                      "no COR donor in series (whole table)"))
+                skipped.append((file_info, series,
+                                "no COR donor in series (whole table)"))
                 continue
             mean_val = sum(donors) / len(donors)
-            fi['cor_input'].setText(f"{mean_val:.2f}")
-            filled_from_series.append((fi, series, mean_val, len(donors)))
+            file_info['cor_input'].setText(f"{mean_val:.2f}")
+            filled_from_series.append((file_info, series, mean_val, len(donors)))
             changes.append(
-                (fi, "", mean_val, series,
+                (file_info, "", mean_val, series,
                  f"series-mean of {len(donors)} donor(s)")
             )
-
-        skipped = still_skipped
 
         if not changes and not skipped:
             self.log_output.append(
