@@ -63,6 +63,12 @@ def _process_one(proj_file, data_folder, model_cache):
         infer_model_path=model_cache["path"],
         infer_window_size=518,
     )
+    # Report grid range so the GUI log shows what the AI actually had to
+    # choose from. If the grid is narrow, the "AI returned same value"
+    # complaint is likely the AI agreeing with the seed, not a bug.
+    if cors:
+        print(f"[infer-worker] GRID {proj_name}: {len(cors)} COR(s) "
+              f"from {min(cors):.2f} to {max(cors):.2f}", flush=True)
     try:
         inference_pipeline(args, np.array(imgs), np.array(cors), try_dir)
     except Exception:
@@ -72,6 +78,8 @@ def _process_one(proj_file, data_folder, model_cache):
     # inference_pipeline writes center_of_rotation.txt in try_dir
     cor_txt = os.path.join(try_dir, 'center_of_rotation.txt')
     if not os.path.exists(cor_txt):
+        print(f"[infer-worker] FAIL {proj_name}: inference_pipeline did not "
+              f"write center_of_rotation.txt", flush=True)
         return False
     # Print result so parent process can optionally stream it
     try:
@@ -80,8 +88,10 @@ def _process_one(proj_file, data_folder, model_cache):
         if lines:
             print(f"[infer-worker] OK {proj_file} => {lines[-1]}", flush=True)
             return True
+        print(f"[infer-worker] FAIL {proj_name}: center_of_rotation.txt is "
+              f"empty", flush=True)
     except Exception:
-        pass
+        traceback.print_exc()
     return False
 
 
