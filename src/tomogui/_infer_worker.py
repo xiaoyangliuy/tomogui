@@ -27,6 +27,16 @@ _CENTER_RE = re.compile(r'center(\d+\.\d+)')
 def _process_one(proj_file, data_folder, model_cache):
     proj_name = os.path.splitext(os.path.basename(proj_file))[0]
     try_dir = os.path.join(f"{data_folder}_rec", "try_center", proj_name)
+    # Remove any stale center_of_rotation.txt from a previous run BEFORE
+    # starting inference. If the current run fails for any reason, the GUI
+    # must not read an old value and mistake it for a fresh result.
+    stale = os.path.join(try_dir, 'center_of_rotation.txt')
+    if os.path.exists(stale):
+        try:
+            os.remove(stale)
+        except OSError as _e:
+            print(f"[infer-worker] WARN {proj_name}: could not remove stale "
+                  f"center_of_rotation.txt ({_e})", flush=True)
     tiffs = sorted(glob.glob(os.path.join(try_dir, "*.tiff")))
     if not tiffs:
         print(f"[infer-worker] SKIP {proj_name}: no try TIFFs in {try_dir}", flush=True)

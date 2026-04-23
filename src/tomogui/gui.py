@@ -3913,10 +3913,19 @@ class TomoGUI(QWidget):
 		    
     #=============Batch OPERATIONS==================
     def _batch_select_all(self):
-        """Select all files in the batch list"""
+        """Select all files in the batch list, except files flagged as
+        auto-skipped (small size — typically aborted scans)."""
+        skipped_small = 0
         for file_info in self.batch_file_main_list:
+            if file_info.get('skipped_small'):
+                skipped_small += 1
+                continue
             file_info['checkbox'].setChecked(True)
-        self.log_output.append(f'<span style="color:green;">Select all files in table</span>')
+        msg = '<span style="color:green;">Select all files in table</span>'
+        if skipped_small:
+            msg += (f' <span style="color:#888;">'
+                    f'({skipped_small} small-file row(s) kept unchecked)</span>')
+        self.log_output.append(msg)
 
     def _batch_deselect_all(self):
         """Deselect all files in the batch list"""
@@ -5583,9 +5592,7 @@ class TomoGUI(QWidget):
             )
             return
 
-        # Auto-fill missing per-row CORs from the series mean BEFORE validating.
-        # Same rule as Fix COR Outliers: donors are any files in the whole table
-        # with a numeric COR, grouped by filename series.
+        # Series grouping helper (same rule as Fix COR Outliers).
         import re as _re
         _IDX_RE = _re.compile(r'^(.*?)[._-]*(\d+)$')
 
@@ -5593,6 +5600,9 @@ class TomoGUI(QWidget):
             m = _IDX_RE.match(os.path.splitext(os.path.basename(name))[0])
             return m.group(1) if m else os.path.splitext(os.path.basename(name))[0]
 
+        # Build donor map (whole table) up front — PREVIEW only: we need to
+        # know which rows would get auto-filled to validate the run, but we
+        # won't actually mutate the table until after the user confirms.
         _series_cors = {}
         for fi_all in self.batch_file_main_list:
             try:
@@ -5602,39 +5612,20 @@ class TomoGUI(QWidget):
                 continue
             _series_cors.setdefault(_sk(fi_all['filename']), []).append(v)
 
-        auto_filled = 0
+        will_auto_fill = []    # (file_info, mean_val)
+        missing_seed = []
         for fi in selected_files:
             cur = (fi['cor_input'].text().strip()
                    if fi.get('cor_input') else "")
             try:
                 float(cur)
-                continue  # already has a COR
+                continue  # already has a COR — nothing to do
             except (ValueError, TypeError):
                 pass
             donors = _series_cors.get(_sk(fi['filename']), [])
-            if not donors:
-                continue
-            mean_val = sum(donors) / len(donors)
-            fi['cor_input'].setText(f"{mean_val:.2f}")
-            auto_filled += 1
-        if auto_filled:
-            self.log_output.append(
-                f'<span style="color:#8e44ad;">📍 Auto-filled {auto_filled} missing '
-                f'COR(s) from series mean before AI Reco.</span>'
-            )
-
-        # Build the final "missing seed" list — any selected file that STILL
-        # lacks a valid COR and has no top-bar fallback (only relevant when
-        # Try is ticked and cor_method is not 'auto').
-        missing_seed = []
-        for fi in selected_files:
-            row_txt = fi['cor_input'].text().strip() if fi.get('cor_input') else ""
-            try:
-                float(row_txt)
-                row_ok = True
-            except (ValueError, TypeError):
-                row_ok = False
-            if not row_ok and not top_bar_ok and self.cor_method_box.currentText() != "auto":
+            if donors:
+                will_auto_fill.append((fi, sum(donors) / len(donors)))
+            elif not top_bar_ok and self.cor_method_box.currentText() != "auto":
                 missing_seed.append(fi['filename'])
 
         if run_try and missing_seed:
@@ -5659,6 +5650,10 @@ class TomoGUI(QWidget):
             f"{len(selected_files) - row_cor_count} will fall back to the top-bar "
             f"({top_bar_txt or 'auto'})."
         )
+        fill_summary = (
+            f"\n{len(will_auto_fill)} file(s) will be auto-filled from series mean."
+            if will_auto_fill else ""
+        )
 
         phases_str = " + ".join(
             p for p, on in [("Try", run_try), ("Infer", run_infer),
@@ -5668,11 +5663,25 @@ class TomoGUI(QWidget):
             self, 'Confirm Batch AI Reco',
             f'Run phases: <b>{phases_str}</b> on '
             f'{len(selected_files)} selected files?\n'
-            f'Seed policy per file: row COR if present, else top-bar.\n{seed_summary}',
+            f'Seed policy per file: row COR if present, else top-bar.\n'
+            f'{seed_summary}{fill_summary}',
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No
         )
         if reply != QMessageBox.Yes:
             return
+
+        # Confirmed → now actually apply the auto-fills so the table reflects
+        # what the run will use.
+        if will_auto_fill:
+            for fi, mean_val in will_auto_fill:
+                try:
+                    fi['cor_input'].setText(f"{mean_val:.2f}")
+                except (RuntimeError, AttributeError):
+                    pass
+            self.log_output.append(
+                f'<span style="color:#8e44ad;">📍 Auto-filled {len(will_auto_fill)} '
+                f'missing COR(s) from series mean before AI Reco.</span>'
+            )
 
         num_gpus = self.batch_gpus_per_machine.value()
         machine = self.batch_machine_box.currentText()
