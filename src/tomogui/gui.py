@@ -4701,22 +4701,33 @@ class TomoGUI(QWidget):
 
         if modifiers == Qt.ShiftModifier and self.batch_last_clicked_row is not None:
             # Shift-click: check every row between the previously-clicked row
-            # and this one. No automatic COR propagation — use the
-            # Fix COR Outliers button to fill any missing CORs from series.
+            # and this one, EXCEPT files flagged as auto-skipped (small size).
+            # Those stay unchecked so a range select doesn't silently re-enable
+            # aborted scans.
             start_row = min(self.batch_last_clicked_row, row)
             end_row = max(self.batch_last_clicked_row, row)
 
+            n_skipped_small = 0
             for r in range(start_row, end_row + 1):
                 for file_info in self.batch_file_main_list:
-                    if file_info['row'] == r:
-                        file_info['checkbox'].setChecked(True)
+                    if file_info['row'] != r:
+                        continue
+                    if file_info.get('skipped_small'):
+                        n_skipped_small += 1
                         break
+                    file_info['checkbox'].setChecked(True)
+                    break
 
             n = end_row - start_row + 1
             self.log_output.append(
                 f'<span style="color:green;">✅ Selected rows {start_row}–{end_row} '
                 f'({n} files)</span>'
             )
+            if n_skipped_small:
+                self.log_output.append(
+                    f'<span style="color:#888;">   ({n_skipped_small} small-file '
+                    f'row(s) kept unchecked)</span>'
+                )
 
         # Update last clicked row
         self.batch_last_clicked_row = row
@@ -5258,7 +5269,8 @@ class TomoGUI(QWidget):
 
     def _batch_run_try_selected(self):
         """Run try reconstruction on all selected files with GPU queue management"""
-        selected_files = [f for f in self.batch_file_main_list if f['checkbox'].isChecked()]
+        selected_files = [f for f in self.batch_file_main_list
+                          if f['checkbox'].isChecked() and not f.get('skipped_small')]
         machine = self.batch_machine_box.currentText()
 
         if not selected_files:
@@ -5522,6 +5534,21 @@ class TomoGUI(QWidget):
         goes through the full AI pipeline one after the other so the torch
         inference step doesn't fight the GPU with concurrent tomocupy jobs."""
         selected_files = [f for f in self.batch_file_main_list if f['checkbox'].isChecked()]
+        # Drop auto-skipped small files even if they somehow ended up checked
+        # (e.g. user re-checked manually). They're marked as aborted scans and
+        # have no COR — including them would wrongly block the run.
+        dropped_small = [f for f in selected_files if f.get('skipped_small')]
+        if dropped_small:
+            selected_files = [f for f in selected_files if not f.get('skipped_small')]
+            self.log_output.append(
+                f'<span style="color:#888;">🗑 ignoring {len(dropped_small)} '
+                f'small-file row(s) flagged as aborted scans.</span>'
+            )
+            for fi in dropped_small:
+                try:
+                    fi['checkbox'].setChecked(False)
+                except Exception:
+                    pass
         if not selected_files:
             QMessageBox.warning(self, "Warning", "No files selected.")
             return
@@ -5542,17 +5569,6 @@ class TomoGUI(QWidget):
         except (ValueError, TypeError):
             top_bar_ok = False
 
-        missing_seed = []
-        for fi in selected_files:
-            row_txt = fi['cor_input'].text().strip() if fi.get('cor_input') else ""
-            try:
-                float(row_txt)
-                row_ok = True
-            except (ValueError, TypeError):
-                row_ok = False
-            if not row_ok and not top_bar_ok and self.cor_method_box.currentText() != "auto":
-                missing_seed.append(fi['filename'])
-
         # Read phase selection up front so we can validate seeds only when
         # the seed-consuming phase (Try) is actually going to run.
         run_try = self.batch_ai_phase_try.isChecked()
@@ -5567,11 +5583,65 @@ class TomoGUI(QWidget):
             )
             return
 
+        # Auto-fill missing per-row CORs from the series mean BEFORE validating.
+        # Same rule as Fix COR Outliers: donors are any files in the whole table
+        # with a numeric COR, grouped by filename series.
+        import re as _re
+        _IDX_RE = _re.compile(r'^(.*?)[._-]*(\d+)$')
+
+        def _sk(name):
+            m = _IDX_RE.match(os.path.splitext(os.path.basename(name))[0])
+            return m.group(1) if m else os.path.splitext(os.path.basename(name))[0]
+
+        _series_cors = {}
+        for fi_all in self.batch_file_main_list:
+            try:
+                v = float((fi_all['cor_input'].text().strip()
+                           if fi_all.get('cor_input') else ""))
+            except (ValueError, TypeError):
+                continue
+            _series_cors.setdefault(_sk(fi_all['filename']), []).append(v)
+
+        auto_filled = 0
+        for fi in selected_files:
+            cur = (fi['cor_input'].text().strip()
+                   if fi.get('cor_input') else "")
+            try:
+                float(cur)
+                continue  # already has a COR
+            except (ValueError, TypeError):
+                pass
+            donors = _series_cors.get(_sk(fi['filename']), [])
+            if not donors:
+                continue
+            mean_val = sum(donors) / len(donors)
+            fi['cor_input'].setText(f"{mean_val:.2f}")
+            auto_filled += 1
+        if auto_filled:
+            self.log_output.append(
+                f'<span style="color:#8e44ad;">📍 Auto-filled {auto_filled} missing '
+                f'COR(s) from series mean before AI Reco.</span>'
+            )
+
+        # Build the final "missing seed" list — any selected file that STILL
+        # lacks a valid COR and has no top-bar fallback (only relevant when
+        # Try is ticked and cor_method is not 'auto').
+        missing_seed = []
+        for fi in selected_files:
+            row_txt = fi['cor_input'].text().strip() if fi.get('cor_input') else ""
+            try:
+                float(row_txt)
+                row_ok = True
+            except (ValueError, TypeError):
+                row_ok = False
+            if not row_ok and not top_bar_ok and self.cor_method_box.currentText() != "auto":
+                missing_seed.append(fi['filename'])
+
         if run_try and missing_seed:
             self.log_output.append(
                 '<span style="color:red;">❌ AI Reco Try needs a starting COR for '
-                'every selected file. The following have neither a row COR nor a '
-                'valid top-bar fallback:</span>'
+                'every selected file. The following have no row COR, no series-mean '
+                'donor, and no valid top-bar fallback:</span>'
             )
             for fn in missing_seed[:10]:
                 self.log_output.append(f'   {fn}')
@@ -5783,7 +5853,8 @@ class TomoGUI(QWidget):
 
     def _batch_run_full_selected(self):
         """Run full reconstruction on all selected files with GPU queue management"""
-        selected_files = [f for f in self.batch_file_main_list if f['checkbox'].isChecked()]
+        selected_files = [f for f in self.batch_file_main_list
+                          if f['checkbox'].isChecked() and not f.get('skipped_small')]
         machine = self.batch_machine_box.currentText()
 
         if not selected_files:
