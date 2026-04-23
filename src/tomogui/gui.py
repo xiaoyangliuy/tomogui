@@ -6456,16 +6456,18 @@ class TomoGUI(QWidget):
         """Robustly update a batch-table row's COR cell. Tries the stored
         ``file_info['cor_input']`` widget first, then falls back to a live
         ``cellWidget(row, 2)`` lookup in case the stored reference is stale
-        after a table rebuild. Also updates ``self.cor_data`` and nudges Qt
-        to repaint."""
+        after a table rebuild. Also updates ``self.cor_data``, logs the old
+        → new transition, and nudges Qt to repaint."""
         try:
             txt = f"{float(cor_val):.2f}"
         except (ValueError, TypeError):
             return
+        old_txt = ""
         hit = False
         w = file_info.get('cor_input')
         if w is not None:
             try:
+                old_txt = w.text().strip()
                 w.setText(txt)
                 hit = True
             except RuntimeError:
@@ -6481,6 +6483,8 @@ class TomoGUI(QWidget):
             live_w = self.batch_file_main_table.cellWidget(r, 2)
             if live_w is not None and live_w is not w:
                 try:
+                    if not old_txt:
+                        old_txt = live_w.text().strip()
                     live_w.setText(txt)
                     hit = True
                 except RuntimeError:
@@ -6489,6 +6493,29 @@ class TomoGUI(QWidget):
             path = file_info.get('path')
             if path:
                 self.cor_data[path] = txt
+            # Diagnostic — make it obvious when the AI-chosen value equals
+            # what was already in the cell (either the seed or a prior run).
+            base = os.path.basename(file_info.get('filename', '') or '')
+            try:
+                unchanged = (old_txt and
+                             abs(float(old_txt) - float(txt)) < 1e-6)
+            except (ValueError, TypeError):
+                unchanged = False
+            if unchanged:
+                self.log_output.append(
+                    f'<span style="color:#888;">   ≈ COR {base}: AI returned '
+                    f'the same value ({txt}) as was already in the cell.</span>'
+                )
+            elif old_txt:
+                self.log_output.append(
+                    f'<span style="color:#1a8cff;">   ✎ COR {base}: '
+                    f'{old_txt} → {txt}</span>'
+                )
+            else:
+                self.log_output.append(
+                    f'<span style="color:#1a8cff;">   ✎ COR {base}: '
+                    f'(empty) → {txt}</span>'
+                )
             QApplication.processEvents()
 
     def _on_infer_output(self, process, filename, file_info):
