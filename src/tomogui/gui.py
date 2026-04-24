@@ -5546,8 +5546,9 @@ class TomoGUI(QWidget):
             )
             return
 
-        # User-specified formula, verbatim.
-        angle_deg = float(np.degrees(math.atan((cor1 - cor2) / 2) / vertical))
+        # Camera tilt from COR shift over the image height:
+        #   tan(angle) = (COR_top - COR_bottom) / verticalImageSize
+        angle_deg = float(np.degrees(math.atan((cor1 - cor2) / vertical)))
 
         msg_short = (
             f"COR @ nsino=0.1 (top):    {cor1:.2f}\n"
