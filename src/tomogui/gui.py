@@ -645,6 +645,24 @@ class TomoGUI(QWidget):
                                "each outlier with the average of its two neighbours")
         fix_cor_btn.clicked.connect(lambda: self._fix_cor_outliers())
         batch_ops.addWidget(fix_cor_btn)
+        clear_cor_btn = QPushButton("Clear CORs")
+        clear_cor_btn.setStyleSheet("QPushButton { font-size: 10.5pt; color: #b26a00; }")
+        clear_cor_btn.setToolTip("Clear the COR value for every checked file "
+                                 "(table and rot_cen.json). Useful before "
+                                 "re-running AI Reco from scratch.")
+        clear_cor_btn.clicked.connect(self._clear_selected_cors)
+        batch_ops.addWidget(clear_cor_btn)
+        camrot_btn = QPushButton("CamRot")
+        camrot_btn.setStyleSheet("QPushButton { font-size: 10.5pt; color: #00796b; }")
+        camrot_btn.setToolTip(
+            "Estimate the camera rotation angle of the currently highlighted "
+            "file.\n"
+            "Runs Try+AI-infer at nsino=0.1 (top) and nsino=0.9 (bottom), "
+            "then computes the angle from the COR difference and image "
+            "height."
+        )
+        camrot_btn.clicked.connect(self._cam_rot_estimate)
+        batch_ops.addWidget(camrot_btn)
         batch_ops.addWidget(QLabel("max Δ:"))
         self.cor_outlier_max = QDoubleSpinBox()
         self.cor_outlier_max.setRange(1.0, 1000.0)
@@ -3183,7 +3201,15 @@ class TomoGUI(QWidget):
                 result["code"] = -1
             if loop is not None:
                 loop.quit()
-            self.log_output.append(f'<span style="color:red;">\u274c [{name}] {p.errorString()}</span>')
+            # Guard: QProcess may already be destroyed if the event loop
+            # reentered and cleaned up before this handler ran.
+            try:
+                msg = p.errorString()
+            except RuntimeError:
+                msg = str(_err)
+            self.log_output.append(
+                f'<span style="color:red;">\u274c [{name}] {msg}</span>'
+            )
 
         p.finished.connect(on_finished)
         p.errorOccurred.connect(on_error)
@@ -3196,7 +3222,11 @@ class TomoGUI(QWidget):
 
         if wait:
             loop.exec()
-            return int(result["code"])
+            # result["code"] is None if the process never started cleanly
+            # (binary missing, permission denied). Return a sentinel int
+            # rather than crashing on int(None).
+            code = result.get("code")
+            return int(code) if code is not None else -1
 
         return p
 
@@ -5302,6 +5332,239 @@ class TomoGUI(QWidget):
 
         self._run_batch_with_queue(selected_files, recon_type='try', num_gpus=num_gpus, machine=machine)
 
+    def _clear_selected_cors(self):
+        """Clear the COR cell of every checked row, drop the value from
+        self.cor_data, and persist the change to rot_cen.json."""
+        selected = [f for f in self.batch_file_main_list if f['checkbox'].isChecked()]
+        if not selected:
+            QMessageBox.warning(self, "Warning", "No files selected.")
+            return
+        reply = QMessageBox.question(
+            self, 'Clear CORs',
+            f'Clear the COR value for {len(selected)} selected file(s)?\n'
+            f'This updates the table and rot_cen.json.',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        cleared = 0
+        for fi in selected:
+            # Prefer the live cellWidget in column 2 so we survive stale
+            # file_info['cor_input'] references.
+            row_found = -1
+            base = os.path.basename(fi.get('filename', '') or '')
+            for r in range(self.batch_file_main_table.rowCount()):
+                item = self.batch_file_main_table.item(r, 1)
+                if item and item.text() == base:
+                    row_found = r
+                    break
+            w = (self.batch_file_main_table.cellWidget(row_found, 2)
+                 if row_found >= 0 else None)
+            w = w or fi.get('cor_input')
+            if w is None:
+                continue
+            try:
+                w.setText("")
+                fi['cor_input'] = w
+                cleared += 1
+            except RuntimeError:
+                continue
+            # Drop from the authoritative COR map too.
+            path = fi.get('path')
+            if path and path in self.cor_data:
+                del self.cor_data[path]
+
+        data_folder = self.data_path.text().strip()
+        if data_folder:
+            self._save_cor_data(data_folder, self.cor_data)
+        self.log_output.append(
+            f'<span style="color:#b26a00;">🧽 Cleared COR on {cleared} '
+            f'selected row(s) and persisted to rot_cen.json.</span>'
+        )
+
+    def _cam_rot_estimate(self):
+        """Estimate camera rotation angle of the highlighted file.
+        Runs Try + AI-infer at nsino=0.1 and nsino=0.9 and computes
+
+            angle_deg = np.degrees(atan((COR1 - COR2) / 2) / verticalImageSize)
+
+        where verticalImageSize is the number of rows in /exchange/data.
+        """
+        import math
+        import glob
+        import re as _re
+        import shutil
+        from argparse import Namespace
+        import numpy as np
+        from PIL import Image
+        import h5py
+
+        proj_file = self.highlight_scan
+        if not proj_file:
+            QMessageBox.warning(self, "CamRot",
+                                "Select a file first (click a row).")
+            return
+
+        model_path = self.ai_model_path.text().strip()
+        if not model_path or not os.path.exists(model_path):
+            QMessageBox.warning(self, "CamRot",
+                                "AI model path is not valid.")
+            return
+
+        # Read vertical image size from /exchange/data
+        try:
+            with h5py.File(proj_file, 'r') as fh:
+                vertical = int(fh['/exchange/data'].shape[1])
+        except Exception as e:
+            QMessageBox.warning(self, "CamRot",
+                                f"Cannot read /exchange/data shape: {e}")
+            return
+
+        data_folder = self.data_path.text().strip()
+        proj_name = os.path.splitext(os.path.basename(proj_file))[0]
+        try_dir = os.path.join(f"{data_folder}_rec", "try_center", proj_name)
+
+        # Seed COR: per-row (if the highlighted row has one) else top-bar.
+        seed = ""
+        for fi in self.batch_file_main_list:
+            if fi.get('path') == proj_file:
+                seed = (fi['cor_input'].text().strip()
+                        if fi.get('cor_input') else "")
+                break
+        seed = seed or self.cor_input.text().strip()
+        try:
+            float(seed)
+        except (ValueError, TypeError):
+            QMessageBox.warning(self, "CamRot",
+                                "Need a valid starting COR in the row or "
+                                "the top-bar for the Try runs.")
+            return
+
+        self.log_output.append(
+            f'<span style="color:#00796b;">🎥 CamRot on '
+            f'{os.path.basename(proj_file)} — image height = '
+            f'{vertical} px, seed COR = {seed}</span>'
+        )
+        QApplication.processEvents()
+
+        # Build base tomocupy-try cmd; we'll swap --nsino per call.
+        base_cmd = [
+            "tomocupy", self.recon_way_box.currentText(),
+            "--reconstruction-type", "try",
+            "--file-name", proj_file,
+            "--rotation-axis-auto", "manual",
+            "--rotation-axis", str(seed),
+        ]
+        base_cmd += self._gather_params_args()
+        base_cmd += self._gather_rings_args()
+        base_cmd += self._gather_bhard_args()
+        base_cmd += self._gather_phase_args()
+        base_cmd += self._gather_Geometry_args()
+        base_cmd += self._gather_Data_args()
+        base_cmd += self._gather_Performance_args()
+
+        def _strip_nsino(cmd):
+            out = []
+            skip = False
+            for a in cmd:
+                if skip:
+                    skip = False
+                    continue
+                if a == "--nsino":
+                    skip = True
+                    continue
+                out.append(a)
+            return out
+
+        _CENTER_RE = _re.compile(r'center(\d+\.\d+)')
+
+        def _try_and_infer(nsino):
+            # Clean slate for this nsino
+            if os.path.isdir(try_dir):
+                shutil.rmtree(try_dir, ignore_errors=True)
+            cmd = _strip_nsino(base_cmd) + ["--nsino", str(nsino)]
+            self.log_output.append(
+                f'<span style="color:#00796b;">   → Try at nsino={nsino} …</span>'
+            )
+            QApplication.processEvents()
+            code = self.run_command_live(
+                cmd, proj_file=proj_file,
+                job_label=f"camrot-try-n{nsino}",
+                wait=True, cuda_devices=None
+            )
+            if code != 0:
+                raise RuntimeError(f"tomocupy try at nsino={nsino} failed (exit {code})")
+
+            tiffs = sorted(glob.glob(os.path.join(try_dir, "*.tiff")))
+            imgs, cors = [], []
+            for t in tiffs:
+                m = _CENTER_RE.search(os.path.basename(t))
+                if not m:
+                    continue
+                cors.append(float(m.group(1)))
+                imgs.append(np.array(Image.open(t)).astype(np.float32))
+            if not imgs:
+                raise RuntimeError(
+                    f"no parsable TIFFs produced at nsino={nsino}")
+
+            # Remove any stale center_of_rotation.txt so we only read the
+            # result of THIS inference call.
+            cor_txt = os.path.join(try_dir, "center_of_rotation.txt")
+            if os.path.exists(cor_txt):
+                os.remove(cor_txt)
+
+            from tomogui._tomocor_infer.inference import inference_pipeline
+            args = Namespace(
+                infer_use_8bits=True,
+                infer_downsample_factor=2,
+                infer_num_windows=3,
+                infer_seed_number=10,
+                infer_model_path=model_path,
+                infer_window_size=518,
+            )
+            self.log_output.append(
+                f'<span style="color:#00796b;">   → AI infer at nsino={nsino} …</span>'
+            )
+            QApplication.processEvents()
+            inference_pipeline(args, np.array(imgs), np.array(cors), try_dir)
+            if not os.path.exists(cor_txt):
+                raise RuntimeError(
+                    f"inference at nsino={nsino} produced no center_of_rotation.txt")
+            with open(cor_txt) as fh:
+                lines = [ln.strip() for ln in fh if ln.strip()]
+            if not lines:
+                raise RuntimeError(f"empty center_of_rotation.txt at nsino={nsino}")
+            return float(lines[-1].split()[-1])
+
+        try:
+            cor1 = _try_and_infer(0.1)
+            cor2 = _try_and_infer(0.9)
+        except Exception as e:
+            self.log_output.append(
+                f'<span style="color:red;">❌ CamRot failed: {e}</span>'
+            )
+            return
+
+        # User-specified formula, verbatim.
+        angle_deg = float(np.degrees(math.atan((cor1 - cor2) / 2) / vertical))
+
+        msg_short = (
+            f"COR @ nsino=0.1 (top):    {cor1:.2f}\n"
+            f"COR @ nsino=0.9 (bottom): {cor2:.2f}\n"
+            f"Vertical image size:      {vertical} px\n"
+            f"Estimated camera rotation: {angle_deg:.6f}°"
+        )
+        self.log_output.append(
+            f'<span style="color:#00796b;">🎥 CamRot result: COR(top)={cor1:.2f}, '
+            f'COR(bottom)={cor2:.2f}</span>'
+        )
+        self.log_output.append(
+            f'<span style="color:#00796b;font-weight:bold;">📐 Estimated camera '
+            f'rotation: {angle_deg:.6f}°</span>'
+        )
+        QMessageBox.information(self, "CamRot", msg_short)
+
     def _fix_cor_outliers(self, abs_thresh=10.0, mad_k=5.0, max_thresh=None):
         # Read the cap from the GUI spinner if the caller didn't override it.
         if max_thresh is None:
@@ -5731,33 +5994,86 @@ class TomoGUI(QWidget):
                 self._run_batch_with_queue(selected_files, recon_type='infer',
                                            num_gpus=num_gpus, machine=machine)
 
-                # Collect results — read each file's center_of_rotation.txt
+                # ─── The ONE place that writes AI CORs back to the table ───
+                # Scan column 1 (filename) to find the row, then setText on
+                # cellWidget(row, 2). No stored widget references, no lambda
+                # captures, no cross-thread state. If this doesn't work,
+                # nothing will.
                 inferred = 0
                 for fi in selected_files:
                     proj_file = fi.get('path') or fi.get('file')
                     if not proj_file:
                         continue
-                    proj_name = os.path.splitext(os.path.basename(proj_file))[0]
-                    try_dir = os.path.join(f"{data_folder}_rec", "try_center", proj_name)
-                    cor_txt = os.path.join(try_dir, 'center_of_rotation.txt')
-                    ai_cor = None
-                    if os.path.exists(cor_txt):
-                        try:
-                            with open(cor_txt) as f:
-                                lines = [ln.strip() for ln in f if ln.strip()]
-                            if lines:
-                                ai_cor = lines[-1]
-                                float(ai_cor)  # validate
-                        except Exception:
-                            ai_cor = None
-                    if ai_cor is not None:
-                        inferred += 1
-                        # Belt-and-braces: reapply via the robust helper so
-                        # the cell definitely reflects what's on disk even if
-                        # the stored widget reference is stale.
-                        self._set_cor_cell(fi, ai_cor)
+                    basename = os.path.basename(proj_file)
+                    proj_name = os.path.splitext(basename)[0]
+                    cor_txt = os.path.join(
+                        f"{data_folder}_rec", "try_center",
+                        proj_name, 'center_of_rotation.txt')
+
+                    # Read the AI's answer
+                    if not os.path.exists(cor_txt):
+                        failed_inf.append(basename)
+                        self.log_output.append(
+                            f'<span style="color:red;">   ✗ {basename}: '
+                            f'no center_of_rotation.txt</span>'
+                        )
+                        continue
+                    try:
+                        with open(cor_txt) as f:
+                            raw = [ln.strip() for ln in f if ln.strip()]
+                        if not raw:
+                            raise ValueError("empty file")
+                        ai_cor = float(raw[-1].split()[-1])
+                    except Exception as e:
+                        failed_inf.append(basename)
+                        self.log_output.append(
+                            f'<span style="color:red;">   ✗ {basename}: '
+                            f'could not parse {cor_txt} ({e})</span>'
+                        )
+                        continue
+
+                    txt = f"{ai_cor:.2f}"
+
+                    # Find the row by scanning column 1 directly. This is the
+                    # authoritative lookup — ignores fi['row'] entirely.
+                    row_found = -1
+                    for r in range(self.batch_file_main_table.rowCount()):
+                        item = self.batch_file_main_table.item(r, 1)
+                        if item and item.text() == basename:
+                            row_found = r
+                            break
+                    if row_found < 0:
+                        self.log_output.append(
+                            f'<span style="color:red;">   ✗ {basename}: '
+                            f'row not found in table</span>'
+                        )
+                        continue
+
+                    cell_w = self.batch_file_main_table.cellWidget(row_found, 2)
+                    if cell_w is None:
+                        self.log_output.append(
+                            f'<span style="color:red;">   ✗ {basename}: '
+                            f'no widget at row {row_found} col 2</span>'
+                        )
+                        continue
+                    old_txt = cell_w.text().strip()
+                    cell_w.setText(txt)
+                    # Keep the file_info dict and the global cor_data in sync
+                    fi['cor_input'] = cell_w   # refresh stale ref, just in case
+                    self.cor_data[proj_file] = txt
+                    inferred += 1
+                    if old_txt == txt:
+                        self.log_output.append(
+                            f'<span style="color:#888;">   ≈ {basename}: '
+                            f'{txt} (unchanged)</span>'
+                        )
                     else:
-                        failed_inf.append(os.path.basename(proj_file))
+                        self.log_output.append(
+                            f'<span style="color:#1a8cff;">   ✎ {basename}: '
+                            f'{old_txt or "(empty)"} → {txt}</span>'
+                        )
+                    QApplication.processEvents()
+
                 if data_folder:
                     self._save_cor_data(data_folder, self.cor_data)
                 self.log_output.append(
@@ -6075,49 +6391,13 @@ class TomoGUI(QWidget):
                                 status_text = "Done try"
                                 status_color = "orange"
                             elif job_recon_type == 'infer':
-                                # Fallback: if stdout parsing missed the COR,
-                                # read it from center_of_rotation.txt.
+                                # Only set status here. The actual COR cell
+                                # write is done by a single clean pass at the
+                                # end of Phase B (see _batch_run_ai_selected)
+                                # so there's exactly one update path and no
+                                # stale-widget races.
                                 status_text = "Inferred"
                                 status_color = "#27ae60"
-                                try:
-                                    data_folder = self.data_path.text().strip()
-                                    proj_name = os.path.splitext(
-                                        os.path.basename(file_info["filename"]))[0]
-                                    cor_txt = os.path.join(
-                                        f"{data_folder}_rec", "try_center",
-                                        proj_name, "center_of_rotation.txt")
-                                    if not os.path.exists(cor_txt):
-                                        status_text = "Infer no-output"
-                                        status_color = "#c0392b"
-                                        self.log_output.append(
-                                            f'<span style="color:red;">   ✗ '
-                                            f'{proj_name}: center_of_rotation.txt '
-                                            f'does NOT exist at {cor_txt}</span>'
-                                        )
-                                    else:
-                                        with open(cor_txt) as _f:
-                                            _lines = [ln.strip() for ln in _f if ln.strip()]
-                                        if not _lines:
-                                            status_text = "Infer empty"
-                                            status_color = "#c0392b"
-                                            self.log_output.append(
-                                                f'<span style="color:red;">   ✗ '
-                                                f'{proj_name}: center_of_rotation.txt '
-                                                f'is empty</span>'
-                                            )
-                                        else:
-                                            cor_val = float(_lines[-1].split()[-1])
-                                            ok = self._set_cor_cell(file_info, cor_val)
-                                            if not ok:
-                                                status_text = "Infer cell-fail"
-                                                status_color = "#c0392b"
-                                except Exception as _e:
-                                    status_text = "Infer parse-error"
-                                    status_color = "#c0392b"
-                                    self.log_output.append(
-                                        f'<span style="color:red;">   ✗ '
-                                        f'completion parse-error: {_e}</span>'
-                                    )
                             else:  # full
                                 # Check output directory for actual slice numbers
                                 status_text, status_color = self._get_full_recon_status(file_info["filename"])
@@ -6570,25 +6850,19 @@ class TomoGUI(QWidget):
         return True
 
     def _on_infer_output(self, process, filename, file_info):
-        """Stream inference worker stdout. Parse `[infer-worker] OK <path> => <cor>`
-        lines to update the row's COR field as soon as the worker emits it."""
+        """Pipe inference worker stdout into the log. The actual COR cell
+        write is done once at the end of Phase B, not here — keeps the
+        update path singular and avoids widget-race bugs."""
         data = bytes(process.readAllStandardOutput()).decode(errors="ignore")
         if not data.strip():
             return
         basename = os.path.basename(filename)
         for line in data.strip().split('\n'):
             line = line.strip()
-            if not line:
-                continue
-            self.log_output.append(
-                f'<span style="color:gray;">▸ [{basename}] {line}</span>'
-            )
-            if "[infer-worker] OK " in line and "=>" in line:
-                try:
-                    cor_val = float(line.rsplit("=>", 1)[-1].strip())
-                except Exception:
-                    continue
-                self._set_cor_cell(file_info, cor_val)
+            if line:
+                self.log_output.append(
+                    f'<span style="color:gray;">▸ [{basename}] {line}</span>'
+                )
 
 
     # ===== THEME METHODS =====
