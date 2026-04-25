@@ -653,7 +653,7 @@ class TomoGUI(QWidget):
         clear_cor_btn.clicked.connect(self._clear_selected_cors)
         batch_ops.addWidget(clear_cor_btn)
         camrot_btn = QPushButton("CamRot")
-        camrot_btn.setStyleSheet("QPushButton { font-size: 10.5pt; color: #00796b; }")
+        camrot_btn.setStyleSheet("QPushButton { font-size: 10.5pt; color: #26a69a; font-weight: bold; }")
         camrot_btn.setToolTip(
             "Estimate the camera rotation angle of the currently highlighted "
             "file.\n"
