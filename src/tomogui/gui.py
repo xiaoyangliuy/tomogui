@@ -374,7 +374,7 @@ class TomoGUI(QWidget):
         ai_ops.addWidget(ai_model_label)
         _default_ai_model = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
-            "AImodels", "datav2_518_full_finetune", "epoch_10.pt",
+            "AImodels", "datav2_518_full_finetune", "epoch_10.pth",
         )
         self.ai_model_path = QLineEdit(_default_ai_model)
         self.ai_model_path.setPlaceholderText("Path to model weights (.pth/.pt)")
@@ -2732,13 +2732,47 @@ class TomoGUI(QWidget):
         """Save current GUI params for the highlighted scan to recon_params.json."""
         if not self.highlight_scan:
             return
+        self._persist_params_for_files([self.highlight_scan])
+
+    def _persist_params_for_files(self, files):
+        """Snapshot the current GUI parameters and persist them under each
+        of the given file paths in recon_params.json. The write happens on
+        a background thread so the GUI doesn't block on slow filesystems
+        (NFS, networked home, etc.)."""
+        if not files:
+            return
         data_folder = self.data_path.text().strip()
         if not data_folder or not os.path.isdir(data_folder):
             return
         if self._recon_params_data is None:
             self._recon_params_data = self._load_recon_params_file(data_folder)
-        self._recon_params_data[self.highlight_scan] = self._gather_all_gui_params()
-        self._save_recon_params_file(data_folder, self._recon_params_data)
+        snapshot = self._gather_all_gui_params()
+        # Update the in-memory cache immediately so any subsequent load
+        # in this session reads the new values.
+        targets = [p for p in files if p]
+        for path in targets:
+            self._recon_params_data[path] = snapshot
+        # Take a copy of what to write so the worker thread doesn't race
+        # with future updates of self._recon_params_data.
+        to_write = dict(self._recon_params_data)
+        target_path = os.path.join(data_folder, "recon_params.json")
+
+        def _writer():
+            try:
+                tmp = target_path + ".tmp"
+                with open(tmp, "w") as fh:
+                    json.dump(to_write, fh, indent=2)
+                os.replace(tmp, target_path)
+            except Exception as exc:
+                # Background thread — can't touch GUI directly. Print to
+                # stderr so it shows up in the launching shell / log file.
+                print(f"[tomogui] background param save failed: {exc}",
+                      file=sys.stderr)
+
+        import threading
+        t = threading.Thread(target=_writer, daemon=True,
+                             name="recon-params-saver")
+        t.start()
 
     def _load_scan_params(self, proj_file):
         """Load and apply saved GUI params for proj_file, if they exist."""
@@ -3289,6 +3323,8 @@ class TomoGUI(QWidget):
         if not proj_file:
             self.log_output.append(f"\u274c No file")
             return
+        # Snapshot current GUI params for this file before running.
+        self._persist_params_for_files([proj_file])
         recon_way = self.recon_way_box.currentText()
         cor_method = self.cor_method_box.currentText()
         cor_val = self.cor_input.text().strip()
@@ -3364,6 +3400,8 @@ class TomoGUI(QWidget):
                     self.log_output.append(f'<span style="color:red;">\u26a0\ufe0f Could not remove {temp_try}: {e}</span>')
 
     def try_ai_reconstruction(self):
+        if self.highlight_scan:
+            self._persist_params_for_files([self.highlight_scan])
         """Run Try reconstruction then AI inference to find best COR.
 
         Starting-COR policy: prefer the currently-highlighted row's COR if it
@@ -3858,6 +3896,8 @@ class TomoGUI(QWidget):
     def full_reconstruction(self):
         self._update_full_btn_state()
         proj_file = self.highlight_scan
+        if proj_file:
+            self._persist_params_for_files([proj_file])
         # Mark this file as running locally and grey out button only for it
         self._running_full_file = proj_file
         self._update_full_btn_state()
@@ -5310,6 +5350,7 @@ class TomoGUI(QWidget):
         """Run try reconstruction on all selected files with GPU queue management"""
         selected_files = [f for f in self.batch_file_main_list
                           if f['checkbox'].isChecked() and not f.get('skipped_small')]
+        self._persist_params_for_files([f.get('path') for f in selected_files])
         machine = self.batch_machine_box.currentText()
 
         if not selected_files:
@@ -5405,6 +5446,7 @@ class TomoGUI(QWidget):
             QMessageBox.warning(self, "CamRot",
                                 "Select a file first (click a row).")
             return
+        self._persist_params_for_files([proj_file])
 
         model_path = self.ai_model_path.text().strip()
         if not model_path or not os.path.exists(model_path):
@@ -5807,6 +5849,7 @@ class TomoGUI(QWidget):
         goes through the full AI pipeline one after the other so the torch
         inference step doesn't fight the GPU with concurrent tomocupy jobs."""
         selected_files = [f for f in self.batch_file_main_list if f['checkbox'].isChecked()]
+        self._persist_params_for_files([f.get('path') for f in selected_files])
         # Drop auto-skipped small files even if they somehow ended up checked
         # (e.g. user re-checked manually). They're marked as aborted scans and
         # have no COR — including them would wrongly block the run.
@@ -6059,6 +6102,14 @@ class TomoGUI(QWidget):
                         continue
                     old_txt = cell_w.text().strip()
                     cell_w.setText(txt)
+                    cell_w.setModified(True)
+                    # Force the widget AND the table to repaint right now —
+                    # over SSH X11 / pyqtgraph fallback, scheduled paints
+                    # often don't fire until the queue loop yields enough.
+                    cell_w.repaint()
+                    self.batch_file_main_table.viewport().update()
+                    QApplication.sendPostedEvents()
+                    QApplication.processEvents()
                     # Keep the file_info dict and the global cor_data in sync
                     fi['cor_input'] = cell_w   # refresh stale ref, just in case
                     self.cor_data[proj_file] = txt
@@ -6073,7 +6124,13 @@ class TomoGUI(QWidget):
                             f'<span style="color:#1a8cff;">   ✎ {basename}: '
                             f'{old_txt or "(empty)"} → {txt}</span>'
                         )
-                    QApplication.processEvents()
+
+                # Final blanket repaint so any deferred paint events flush
+                # before the user's eyes see the table.
+                self.batch_file_main_table.viewport().update()
+                self.batch_file_main_table.repaint()
+                QApplication.sendPostedEvents()
+                QApplication.processEvents()
 
                 if data_folder:
                     self._save_cor_data(data_folder, self.cor_data)
@@ -6174,6 +6231,7 @@ class TomoGUI(QWidget):
         """Run full reconstruction on all selected files with GPU queue management"""
         selected_files = [f for f in self.batch_file_main_list
                           if f['checkbox'].isChecked() and not f.get('skipped_small')]
+        self._persist_params_for_files([f.get('path') for f in selected_files])
         machine = self.batch_machine_box.currentText()
 
         if not selected_files:
