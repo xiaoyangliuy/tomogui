@@ -10,105 +10,103 @@ Start TomoGUI from the command line:
 
    tomogui
 
-The main window will open with a clean interface ready for use.
+The main window opens ready to load a dataset.
+
+.. figure:: /_static/screenshots/main_window.png
+   :alt: TomoGUI main window on launch
+   :align: center
+
+   TomoGUI main window with a dataset loaded. Left: controls and the
+   parameter tabs. Right: reconstructed image with contrast and slice
+   controls.
 
 Basic Workflow
 --------------
 
-1. **Select Data Folder**
+1. **Select Data Folder** — click *Browse Data Folder* and navigate to your
+   tomography data directory. HDF5 projection files in the folder appear in
+   the *Projection File* dropdown (and in the Batch tab).
+2. **Select Projection File** — pick the ``.h5`` file to reconstruct.
+3. **Configure Reconstruction** — reconstruction method, COR method,
+   algorithm, binning, nsino-per-chunk, ring-removal, phase retrieval, etc.
+4. **Try** — click *Try* to run a quick multi-COR try reconstruction. The
+   result appears under ``<folder>_rec/try_center/<dataset>/``.
+5. **View Try** — switch to the try-center slice viewer and pick the best
+   COR, or let *AI Reco* choose one automatically (see :doc:`ai_reco`).
+6. **Full** — click *Full* to run the full reconstruction with the chosen
+   COR.
 
-   Click "Browse Data Folder" and navigate to your tomography data directory.
+.. figure:: /_static/screenshots/main_tab_overview.png
+   :alt: Main tab with parameters filled in
+   :align: center
 
-2. **Select Projection File**
-
-   From the "Projection File" dropdown, select your HDF5 (.h5) file containing projection data.
-
-3. **Configure Reconstruction**
-
-   - Set the reconstruction method (recon or recon_steps)
-   - Choose COR method (auto or manual)
-   - If manual, enter the center of rotation value
-   - Select GPU device
-
-4. **Try Reconstruction**
-
-   Click "Try" to perform a quick reconstruction test on a subset of data.
-
-5. **View Results**
-
-   Click "View Try" to visualize the reconstruction result.
-
-6. **Full Reconstruction**
-
-   Once satisfied with the try result, click "Full" for complete reconstruction.
+   Main tab with dataset selected and reconstruction parameters filled in.
 
 Your First Reconstruction
 --------------------------
 
-Step-by-Step Example
-~~~~~~~~~~~~~~~~~~~~
-
-Let's reconstruct a sample dataset:
-
 .. code-block:: text
 
-   1. Click "Browse Data Folder" → Select: /data/tomo/scan_001/
-   2. Projection File dropdown → Select: scan_001.h5
-   3. Reconstruction method → Select: recon
-   4. COR method → Select: manual
-   5. COR value → Enter: 1024.5
-   6. GPU → Select: 0
-   7. Click "Try" button
-   8. Wait for completion (check log output)
-   9. Click "View Try" to see result
-   10. If good, click "Full" for complete reconstruction
+   1. Browse Data Folder      → /data2/32ID/2026-04-Allen-0/
+   2. Projection File         → sample_0001.h5
+   3. Reconstruction method   → recon
+   4. COR method              → manual
+   5. COR value               → 1024.5
+   6. GPU                     → 0
+   7. Click Try
+   8. Click View Try, pick the best slice
+   9. Click Full
+
+After *Try*, the try-center grid can be previewed directly in the image
+panel and the COR slider on the right lets you scrub through candidate
+centers.
 
 Understanding the Interface
-----------------------------
+---------------------------
 
 Main Layout
 ~~~~~~~~~~~
 
-The TomoGUI interface is divided into two main panels:
+The window is divided into two main panels:
 
-**Left Panel** - Control panel with tabs:
-   - Main: Try and Full reconstruction controls
-   - Reconstruction: Parameters for reconstruction algorithms
-   - Hardening: Beam hardening correction settings
-   - Phase: Phase retrieval parameters
-   - Rings: Ring artifact removal
-   - Geometry: Geometric corrections
-   - Data: Data preprocessing options
-   - Performance: Performance tuning
-   - Advanced Config: Configuration file editing
-   - Batch Processing: Multi-file batch operations
+**Left Panel** — controls and parameter tabs:
+   - **Main** — Try / Full / AI Reco / TomoLog buttons and common parameters
+   - **Reconstruction** — algorithm, nsino-per-chunk, binning, etc.
+   - **Hardening** — beam hardening correction
+   - **Phase** — phase retrieval parameters
+   - **Rings** — ring artifact removal
+   - **Geometry** — geometric corrections
+   - **Data** — data preprocessing
+   - **Performance** — performance tuning
+   - **Advanced Config** — full configuration file editing
+   - **Batch** — multi-file batch processing (see :doc:`batch_processing`)
+   - **HDF5 Viewer** — inspect projections and metadata
 
-**Right Panel** - Visualization:
-   - Image display with matplotlib toolbar
-   - Colormap controls
-   - Contrast adjustment (Auto, Reset, Min/Max)
-   - Slice navigation slider
+**Right Panel** — visualisation:
+   - matplotlib image display with toolbar
+   - colormap controls
+   - contrast (Auto 5–95 % / Reset / Min / Max)
+   - slice / COR slider
    - TomoLog integration panel
 
 Log Output
 ~~~~~~~~~~
 
-The log output area shows:
-   - Command execution status
-   - Success/failure messages
-   - Processing progress
-   - Error information
+The log area shows:
+   - command execution status
+   - success / failure messages
+   - processing progress
+   - error information
+   - per-file streaming during Batch AI Phase B
 
-Status indicators:
-   - 🚀 Job started
-   - ✅ Success (green)
-   - ❌ Failure (red)
-   - ⚠️  Warning (orange)
+Status indicators use coloured text: green ✓ for success, red ✗ for
+failure, amber for warnings.
 
 Next Steps
 ----------
 
-- Explore :doc:`interface_overview` for detailed UI components
-- Learn about :doc:`reconstruction` parameters
-- Try :doc:`batch_processing` for multiple datasets
-- Customize with :doc:`themes`
+- :doc:`interface_overview` — tour of the full UI
+- :doc:`reconstruction` — reconstruction parameters in depth
+- :doc:`ai_reco` — automatic COR discovery with DINOv2
+- :doc:`batch_processing` — hundreds of datasets with multi-GPU execution
+- :doc:`themes` — Light / Dark themes

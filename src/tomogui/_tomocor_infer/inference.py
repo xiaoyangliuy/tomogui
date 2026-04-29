@@ -89,6 +89,8 @@ def inference_pipeline(args, img_cache, center_of_rotation_cache, out_dir):
     best_cors = [center_of_rotation_cache[i] for i in np.where(scores == scores.max())[0]]
 
     out_path = Path(out_dir) / 'center_of_rotation.txt'
-    with open(out_path, 'a') as f:
+    # 'w' — each inference run starts a fresh file. Appending leaves stale
+    # values behind that then get mis-read if a later run fails silently.
+    with open(out_path, 'w') as f:
         for cor in best_cors:
             f.write(f"{cor:.1f}\n")
