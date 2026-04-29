@@ -5215,11 +5215,7 @@ class TomoGUI(QWidget):
         selected = []
         for file_info in self.batch_file_main_list:
             if file_info['checkbox'].isChecked():
-                fp = (file_info.get('path')
-                      or file_info.get('file')
-                      or file_info.get('filename'))
-                if fp:
-                    selected.append(fp)
+                selected.append(file_info['path'])
 
         if not selected:
             self.log_output.append('<span style="color:orange;">⚠️ No files selected for deletion</span>')
