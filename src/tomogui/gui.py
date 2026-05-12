@@ -467,10 +467,17 @@ class TomoGUI(QWidget):
         # Row 3: some helpful functions
         others_ops = QHBoxLayout()
         others_ops.setSpacing(5)
-        view_meta_btn = QPushButton("raw/meta")
-        view_meta_btn.setStyleSheet("QPushButton { font-size: 10.5pt; }")
-        view_meta_btn.clicked.connect(lambda checked=False: self._batch_view_data(self.highlight_scan)) #TODO: needs to modify with alrady have functions in Batch Processing tab
-        others_ops.addWidget(view_meta_btn)
+        camrot_btn = QPushButton("CamRot")
+        camrot_btn.setStyleSheet("QPushButton { font-size: 10.5pt; color: #26a69a; font-weight: bold; }")
+        camrot_btn.setToolTip(
+            "Estimate the camera rotation angle of the currently highlighted "
+            "file.\n"
+            "Runs Try+AI-infer at nsino=0.1 (top) and nsino=0.9 (bottom), "
+            "then computes the angle from the COR difference and image "
+            "height."
+        )
+        camrot_btn.clicked.connect(self._cam_rot_estimate)
+        others_ops.addWidget(camrot_btn)
         save_param_btn = QPushButton("Save params")
         save_param_btn.setStyleSheet("QPushButton { font-size: 10.5pt; }")
         save_param_btn.setEnabled(True) #enable
@@ -652,17 +659,6 @@ class TomoGUI(QWidget):
                                  "re-running AI Reco from scratch.")
         clear_cor_btn.clicked.connect(self._clear_selected_cors)
         batch_ops.addWidget(clear_cor_btn)
-        camrot_btn = QPushButton("CamRot")
-        camrot_btn.setStyleSheet("QPushButton { font-size: 10.5pt; color: #26a69a; font-weight: bold; }")
-        camrot_btn.setToolTip(
-            "Estimate the camera rotation angle of the currently highlighted "
-            "file.\n"
-            "Runs Try+AI-infer at nsino=0.1 (top) and nsino=0.9 (bottom), "
-            "then computes the angle from the COR difference and image "
-            "height."
-        )
-        camrot_btn.clicked.connect(self._cam_rot_estimate)
-        batch_ops.addWidget(camrot_btn)
         batch_ops.addWidget(QLabel("max Δ:"))
         self.cor_outlier_max = QDoubleSpinBox()
         self.cor_outlier_max.setRange(1.0, 1000.0)
