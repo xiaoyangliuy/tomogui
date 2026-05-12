@@ -304,7 +304,7 @@ class ChatBotDialog(QDialog):
 
     def __init__(self, parent=None, theme_manager=None):
         super().__init__(parent)
-        self.setWindowTitle("Ask Claude — tomogui assistant")
+        self.setWindowTitle("Ask Recon Assistant — tomogui assistant")
         self.setWindowFlags(Qt.Window)  # independent window with min/max/close
         self.resize(700, 600)
 
@@ -645,7 +645,7 @@ class ChatBotDialog(QDialog):
         cursor.insertHtml(
             f'<div style="background:{asst_bg}; padding:8px; '
             f'border-radius:6px; margin:4px 0 4px 40px;">'
-            f'<b>Claude:</b><br>'
+            f'<b>Recon Assistant:</b><br>'
         )
         # Move cursor inside the open div so subsequent insertText lands there.
         cursor.movePosition(QTextCursor.End)
