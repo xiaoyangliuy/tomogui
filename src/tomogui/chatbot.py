@@ -26,14 +26,45 @@ from pathlib import Path
 from PyQt5.QtCore import QObject, QThread, Qt, pyqtSignal
 from PyQt5.QtGui import QTextCursor
 from PyQt5.QtWidgets import (
-    QDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
+    QComboBox, QDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
     QMessageBox, QPushButton, QTextEdit, QVBoxLayout,
 )
 
 
 KNOWLEDGE_PATH = Path(__file__).parent / "chatbot_knowledge.md"
 SETTINGS_PATH = Path.home() / ".config" / "tomogui" / "api_key"
-MODEL = "claude-opus-4-7"
+CHATBOT_CONFIG_PATH = Path.home() / ".config" / "tomogui" / "chatbot.json"
+
+# Listed in roughly best→cheapest order. The Argo gateway may only support
+# a subset; users can pick whichever the gateway accepts.
+MODELS = [
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
+]
+DEFAULT_MODEL = MODELS[0]
+
+
+def _load_chatbot_config() -> dict:
+    """Return persisted chatbot prefs (model selection, etc.)."""
+    defaults = {"model": DEFAULT_MODEL}
+    if not CHATBOT_CONFIG_PATH.exists():
+        return defaults
+    try:
+        data = json.loads(CHATBOT_CONFIG_PATH.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            defaults.update({k: v for k, v in data.items() if k in defaults})
+    except (OSError, json.JSONDecodeError):
+        pass
+    return defaults
+
+
+def _save_chatbot_config(config: dict) -> None:
+    CHATBOT_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CHATBOT_CONFIG_PATH.write_text(
+        json.dumps(config, indent=2), encoding="utf-8"
+    )
 
 
 @functools.lru_cache(maxsize=1)
@@ -169,12 +200,17 @@ class ChatWorker(QObject):
         self._cancel = False
         self._api_key = None
         self._base_url = None
+        self._model = DEFAULT_MODEL
 
     def set_credentials(self, key: str, base_url: str | None) -> None:
         if key != self._api_key or base_url != self._base_url:
             self._api_key = key
             self._base_url = base_url
             self._client = None  # force rebuild
+
+    def set_model(self, model: str) -> None:
+        if model:
+            self._model = model
 
     def cancel(self) -> None:
         self._cancel = True
@@ -206,7 +242,7 @@ class ChatWorker(QObject):
         try:
             self.started_response.emit()
             with client.messages.stream(
-                model=MODEL,
+                model=self._model,
                 max_tokens=64000,
                 system=system_blocks,
                 messages=messages,
@@ -278,6 +314,7 @@ class ChatBotDialog(QDialog):
         self._busy = False
         self._cached_key: str | None = None
         self._cached_base_url: str | None = None
+        self._model = _load_chatbot_config().get("model", DEFAULT_MODEL)
 
         self._build_ui()
         self._setup_worker()
@@ -297,6 +334,20 @@ class ChatBotDialog(QDialog):
         )
         header_label.setWordWrap(True)
         header.addWidget(header_label, 1)
+        header.addWidget(QLabel("Model:"))
+        self.model_combo = QComboBox()
+        self.model_combo.setEditable(True)  # allow custom model strings (e.g. for Argo)
+        self.model_combo.addItems(MODELS)
+        # Insert the persisted model if it isn't in the default list
+        if self._model not in MODELS:
+            self.model_combo.insertItem(0, self._model)
+        self.model_combo.setCurrentText(self._model)
+        self.model_combo.setToolTip(
+            "Pick a Claude model. The Argo gateway may only support a subset.\n"
+            "You can also type a custom model string (must be a valid Anthropic model ID)."
+        )
+        self.model_combo.currentTextChanged.connect(self._on_model_changed)
+        header.addWidget(self.model_combo)
         self.new_chat_btn = QPushButton("New chat")
         self.new_chat_btn.setToolTip("Clear the conversation history")
         self.new_chat_btn.clicked.connect(self._on_new_chat)
@@ -415,6 +466,7 @@ class ChatBotDialog(QDialog):
                 + (f" → {self._cached_base_url}" if self._cached_base_url else "")
             )
         self._worker.set_credentials(self._cached_key, self._cached_base_url)
+        self._worker.set_model(self._model)
 
         self.input_box.clear()
         self._append_user_bubble(text)
@@ -497,6 +549,16 @@ class ChatBotDialog(QDialog):
         self._set_busy(False)
 
     # ---------- New chat / key edit ----------
+
+    def _on_model_changed(self, name: str):
+        name = (name or "").strip()
+        if not name:
+            return
+        self._model = name
+        try:
+            _save_chatbot_config({"model": name})
+        except OSError:
+            pass  # not fatal — selection still applies for this session
 
     def _on_new_chat(self):
         if self._busy:

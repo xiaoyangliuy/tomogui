@@ -499,7 +499,7 @@ class TomoGUI(QWidget):
         help_tomo_btn.setStyleSheet("QPushButton { font-size: 10.5pt; color: green; }")
         help_tomo_btn.clicked.connect(self.help_tomo)
         others_ops.addWidget(help_tomo_btn)
-        ask_claude_btn = QPushButton("Ask Claude")
+        ask_claude_btn = QPushButton("Ask recon")
         ask_claude_btn.setStyleSheet("QPushButton { font-size: 10.5pt; color: #FF8C00; font-weight: bold; }")
         ask_claude_btn.setToolTip(
             "Open a chat dialog to ask Claude about tomocupy parameters and tomogui workflow.\n"
