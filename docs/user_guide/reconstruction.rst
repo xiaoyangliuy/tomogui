@@ -1,399 +1,93 @@
 Reconstruction Workflow
 =======================
 
-This guide covers the complete workflow for tomographic reconstruction using TomoGUI.
+This page covers the single-file reconstruction workflow. For multi-file
+operations, see :doc:`batch_processing`; for automatic COR discovery, see
+:doc:`ai_reco`.
 
-Quick Reference
+Quick reference
 ---------------
 
-Basic reconstruction steps:
-
-1. Load data folder and select file
-2. Set reconstruction parameters
-3. Run try reconstruction
-4. View and evaluate results
+1. Load data folder and select a file
+2. Set reconstruction parameters (COR, algorithm, binning, …)
+3. Run **Try** (or *AI Reco*) to pick a COR
+4. Evaluate the try output
 5. Adjust parameters if needed
-6. Run full reconstruction
+6. Run **Full**
 
-Try vs Full Reconstruction
---------------------------
+.. figure:: /_static/screenshots/main_tab_overview.png
+   :alt: Main tab with reconstruction parameters
+   :align: center
+
+Try vs Full
+-----------
 
 Try Reconstruction
 ~~~~~~~~~~~~~~~~~~
 
-- Processes a small subset of data
-- Fast execution (seconds to minutes)
-- Used for parameter testing
-- Preview quality
-- Generates try_rec/ output folder
-
-**When to use**:
-   - Testing COR values
-   - Evaluating filter parameters
-   - Checking data quality
-   - Parameter optimization
+- Runs over a small slice range at multiple candidate CORs
+- Fast (seconds to a few minutes)
+- Output: ``<folder>_rec/try_center/<dataset>/center*.tiff``
+- Used for: picking the COR, checking data quality, tuning filter params
 
 Full Reconstruction
 ~~~~~~~~~~~~~~~~~~~
 
-- Processes complete dataset
-- Slower execution (minutes to hours)
-- Production quality
-   - Final results
-- Generates rec/ output folder
-
-**When to use**:
-   - After try reconstruction looks good
-   - For final analysis
-   - Publication-quality images
-   - Complete 3D volumes
+- Processes the complete dataset
+- Slower (minutes to hours depending on size / binning)
+- Output: ``<folder>_rec/<dataset>/recon_*.tiff``
 
 Reconstruction Methods
 ----------------------
 
-recon
-~~~~~
+TomoGUI exposes all TomoCuPy methods via the *Recon* tab:
 
-Standard reconstruction method:
+``FBP``
+   Direct filtered backprojection. Fast, sufficient for most datasets.
 
-- Direct filtered backprojection
-- Faster execution
-- Good for most datasets
-- Lower memory usage
+``gridrec``
+   Grid-based FBP. Good quality / speed trade-off for 360° scans.
 
-**Best for**:
-   - Standard CT scans
-   - Well-behaved data
-   - Quick turnaround
+``LPREC``
+   Log-polar reconstruction. Faster for very large sinograms.
 
-recon_steps
-~~~~~~~~~~~
+Additional flags (``recon_steps`` vs ``recon``, binning, nsino-per-chunk,
+start / end slice) are available on the same tab.
 
-Multi-step reconstruction:
-
-- Iterative reconstruction
-- More processing steps
-- Advanced correction options
-- Higher quality potential
-
-**Best for**:
-   - Challenging datasets
-   - Advanced corrections needed
-   - Maximum quality requirements
-
-Center of Rotation (COR)
--------------------------
-
-Auto Method
-~~~~~~~~~~~
-
-Automatically determines COR:
-
-- No manual input needed
-- Works for most datasets
-- May require good data quality
-
-**Pros**:
-   - Convenient
-   - No prior knowledge needed
-   - Fast
-
-**Cons**:
-   - May fail on noisy data
-   - Can't override if needed
-   - Less control
-
-Manual Method
-~~~~~~~~~~~~~
-
-Specify COR value manually:
-
-- Requires COR value input
-- Full control
-- Consistent results
-
-**Finding COR manually**:
-
-1. Run try reconstruction with estimated value
-2. Check for ring artifacts in result
-3. Adjust COR value up or down
-4. Repeat until minimal artifacts
-5. Use final value for full reconstruction
-
-**Typical COR values**:
-   - 2048x2048 detector: ~1024
-   - 4096x4096 detector: ~2048
-   - Depends on detector centering
-
-See :doc:`../advanced/cor_management` for advanced COR techniques.
-
-Parameter Configuration
------------------------
-
-Main Tab Parameters
-~~~~~~~~~~~~~~~~~~~
-
-Essential settings available in Main tab:
-
-- Reconstruction method
-- COR method and value
-- CUDA device
-- Preset configurations
-
-Other Tab Parameters
-~~~~~~~~~~~~~~~~~~~~
-
-Additional settings in other tabs:
-
-- **Reconstruction**: Algorithm details
-- **Hardening**: Beam hardening correction
-- **Phase**: Phase retrieval
-- **Rings**: Ring removal
-- **Geometry**: Geometric corrections
-- **Data**: Data preprocessing
-
-Reconstruction Workflow
------------------------
-
-Standard Workflow
-~~~~~~~~~~~~~~~~~
-
-Complete reconstruction process:
-
-**Step 1: Data Preparation**
-
-.. code-block:: text
-
-   - Click "Browse Data Folder"
-   - Navigate to data directory
-   - Click "Select Folder"
-   - File list auto-populates
-
-**Step 2: File Selection**
-
-.. code-block:: text
-
-   - Click "Projection File" dropdown
-   - Select desired .h5 file
-   - Note: Files sorted newest first
-
-**Step 3: Basic Configuration**
-
-.. code-block:: text
-
-   - Reconstruction method: recon (for most cases)
-   - COR method: manual (for control)
-   - COR value: Enter known value or estimate
-   - CUDA: Select GPU device (usually 0)
-
-**Step 4: Try Reconstruction**
-
-.. code-block:: text
-
-   - Click "Try" button
-   - Monitor log output for progress
-   - Wait for completion (🏁 symbol)
-   - Check for errors (❌ symbols)
-
-**Step 5: View Try Results**
-
-.. code-block:: text
-
-   - Click "View Try" button
-   - Examine reconstruction in right panel
-   - Use slice slider to navigate
-   - Check for artifacts
-
-**Step 6: Evaluation**
-
-Assess quality:
-
-- Ring artifacts → Adjust COR
-- Noise → Check data quality or adjust filters
-- Blurriness → Check focus and detector alignment
-- Streaks → Check for bad pixels or motion
-
-**Step 7: Parameter Adjustment**
-
-If needed:
-
-.. code-block:: text
-
-   - Adjust COR value (±0.5 typically)
-   - Modify filter parameters in other tabs
-   - Click "Try" again
-   - Repeat until satisfied
-
-**Step 8: Full Reconstruction**
-
-When try looks good:
-
-.. code-block:: text
-
-   - Click "Full" button
-   - Wait for completion (longer than try)
-   - Monitor progress in log
-   - View results with "View Full"
-
-Advanced Workflow
-~~~~~~~~~~~~~~~~~
-
-For challenging datasets:
-
-1. Use recon_steps method
-2. Enable beam hardening correction
-3. Apply ring removal
-4. Use phase retrieval (if phase contrast)
-5. Iterate try reconstructions
-6. Run full with optimized parameters
-
-See individual feature pages for parameter details.
-
-Quality Assessment
+Centre of Rotation
 ------------------
 
-Evaluating Reconstructions
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+COR can be set four ways:
 
-Key quality indicators:
+1. **Manual** — type a value in the *COR* field on the Main tab.
+2. **Auto** — TomoCuPy's built-in auto-centre. Selected via the COR
+   method dropdown.
+3. **Try + View Try** — run Try, slide through candidate CORs, pick the
+   best one, it is copied into the COR field.
+4. **AI Reco** — DINOv2-based automatic selection (see :doc:`ai_reco`).
+   Result is written to
+   ``<folder>_rec/try_center/<dataset>/center_of_rotation.txt`` and
+   pulled back into the GUI.
 
-**Ring Artifacts**
-   - Concentric circles around COR
-   - Indicates wrong COR value
-   - Adjust COR to minimize
+For multi-file operations, see :ref:`cor-management` for how per-row CORs
+interact with the top-bar COR input, and how *Fix COR Outliers* works.
 
-**Edge Sharpness**
-   - Sharp edges = good focus
-   - Blurry edges = alignment issues
-   - Check detector/sample position
-
-**Noise Level**
-   - Random pixel variations
-   - Acceptable for try, minimize for full
-   - Adjust filters or averaging
-
-**Streaking Artifacts**
-   - Radial streaks from center
-   - Bad pixels or motion
-   - May need data correction
-
-**Contrast**
-   - Can features be distinguished?
-   - Adjust min/max in visualization
-   - May need preprocessing
-
-Interpreting Results
-~~~~~~~~~~~~~~~~~~~~~
-
-Good reconstruction:
-   - Clear feature boundaries
-   - Minimal artifacts
-   - Good contrast
-   - Sharp edges
-   - Uniform background
-
-Poor reconstruction:
-   - Heavy ring artifacts
-   - Excessive noise
-   - Streaks or distortions
-   - Blurry features
-   - Non-uniform background
-
-Common Issues
--------------
-
-COR Problems
-~~~~~~~~~~~~
-
-**Symptoms**: Ring artifacts, distorted features
-
-**Solution**:
-   - Adjust COR value incrementally
-   - Try auto method
-   - Check detector alignment
-
-Data Quality
-~~~~~~~~~~~~
-
-**Symptoms**: Noisy, low contrast results
-
-**Solution**:
-   - Check flat/dark field quality
-   - Verify projection data
-   - Increase averaging
-   - Use better filters
-
-GPU Issues
-~~~~~~~~~~
-
-**Symptoms**: Crashes, CUDA errors
-
-**Solution**:
-   - Check nvidia-smi for GPU status
-   - Reduce data size
-   - Free GPU memory
-   - Use different GPU device
-
-See :doc:`../advanced/troubleshooting` for more solutions.
-
-Output Files
-------------
-
-Try Reconstruction
-~~~~~~~~~~~~~~~~~~
-
-Located in: ``<data_folder>/try_rec/``
-
-Files:
-   - Reconstructed slices (TIFF or HDF5)
-   - Metadata
-   - Processing log
-
-Full Reconstruction
-~~~~~~~~~~~~~~~~~~~
-
-Located in: ``<data_folder>/rec/``
-
-Files:
-   - Complete reconstructed volume
-   - All slices
-   - Metadata
-   - Processing parameters
-
-Best Practices
+Output folders
 --------------
 
-Workflow Tips
-~~~~~~~~~~~~~
+All output lives next to the data folder with a ``_rec`` suffix:
 
-1. **Always run try first** - Never run full without testing
-2. **Save working parameters** - Use Save params button
-3. **Document COR values** - Keep notes or use batch CSV
-4. **Check logs** - Review for warnings/errors
-5. **Keep try results** - Compare before running full
+.. code-block:: text
 
-Parameter Selection
-~~~~~~~~~~~~~~~~~~~
+   /data/tomo/scan/                    ← projections
+   /data/tomo/scan_rec/                ← reconstructions
+       ├── try_center/<dataset>/        ← try TIFFs + center_of_rotation.txt
+       └── <dataset>/recon_*.tiff       ← full reconstruction
 
-1. **Start simple** - Use default parameters initially
-2. **Change one at a time** - Isolate parameter effects
-3. **Use presets** - BeamHarden/Phase buttons
-4. **Iterate** - Multiple try runs are cheap
-5. **Save configurations** - For reproducibility
+Per-dataset parameters
+----------------------
 
-Performance
-~~~~~~~~~~~
-
-1. **Use appropriate GPU** - Check nvidia-smi
-2. **Monitor memory** - Large datasets need more RAM
-3. **Optimize binning** - For faster try reconstructions
-4. **Batch overnight** - Full reconstructions in batch mode
-5. **Use fast storage** - SSD for data folders
-
-Next Steps
-----------
-
-- Learn about :doc:`batch_processing` for multiple datasets
-- Explore :doc:`../features/reconstruction_params` for advanced parameters
-- See :doc:`../features/batch_tab` for parallel processing
-- Check :doc:`../advanced/gpu_management` for performance tuning
+Every reconstruction parameter tab writes its values to a JSON sidecar
+next to the projection file. Re-loading the file restores its last-used
+parameters. This sidecar is also what the Batch tab reads when you click
+*Apply parameters to selected* on a row.
