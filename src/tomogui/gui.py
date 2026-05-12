@@ -58,6 +58,7 @@ except ImportError:
     PG_AVAILABLE = False
 
 from .theme_manager import ThemeManager
+from .chatbot import ChatBotDialog
 from .hdf5_viewer import HDF5ImageDividerDialog
 from .batch_progress_window import ProgressWindow
 
@@ -232,6 +233,8 @@ class TomoGUI(QWidget):
         # Initialize theme manager (will apply theme after UI is built)
         self.theme_manager = ThemeManager()
         self.theme_manager.register_callback(self._on_theme_changed)
+
+        self._chatbot_dialog = None
 
         #initialize progress bar for batch process
         self.progress_window = ProgressWindow(self)
@@ -496,6 +499,14 @@ class TomoGUI(QWidget):
         help_tomo_btn.setStyleSheet("QPushButton { font-size: 10.5pt; color: green; }")
         help_tomo_btn.clicked.connect(self.help_tomo)
         others_ops.addWidget(help_tomo_btn)
+        ask_claude_btn = QPushButton("Ask Claude")
+        ask_claude_btn.setStyleSheet("QPushButton { font-size: 10.5pt; color: #FF8C00; font-weight: bold; }")
+        ask_claude_btn.setToolTip(
+            "Open a chat dialog to ask Claude about tomocupy parameters and tomogui workflow.\n"
+            "Requires the 'anthropic' package (pip install anthropic) and an ANTHROPIC_API_KEY."
+        )
+        ask_claude_btn.clicked.connect(self._open_chatbot)
+        others_ops.addWidget(ask_claude_btn)
         main_tab.addLayout(others_ops)
 
         # Row 4 - batch process table
@@ -6998,6 +7009,14 @@ class TomoGUI(QWidget):
             self._save_machine_config(self.machine_config)
             self._populate_machine_list()  # Refresh the dropdown
             self.log_output.append('<span style="color:green;">✓ Machine settings saved</span>')
+
+    def _open_chatbot(self):
+        """Open the Claude-powered chatbot dialog (or raise it if already open)."""
+        if self._chatbot_dialog is None:
+            self._chatbot_dialog = ChatBotDialog(self, self.theme_manager)
+        self._chatbot_dialog.show()
+        self._chatbot_dialog.raise_()
+        self._chatbot_dialog.activateWindow()
 
 
 if __name__ == "__main__":
